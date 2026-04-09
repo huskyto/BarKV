@@ -1,11 +1,12 @@
 
 use crate::model::EntryKey;
-use crate::model::EngineError;
 use crate::model::KeyValue;
+use crate::model::EngineError;
+use crate::model::StoreArchive;
 
 
 pub struct BarKVEngine {
-
+    store: StoreArchive
 }
 
 impl BarKVEngine {
@@ -27,11 +28,11 @@ impl BarKVEngine {
         todo!()     // TODO
     }
 
-    pub fn keys(&self, bag: &EntryKey) -> &Vec<EntryKey> {
+    pub fn list_keys(&self, bag: &EntryKey) -> &Vec<EntryKey> {
         todo!()     // TODO
     }
 
-    pub fn entries(&self, bag: &EntryKey) -> &Vec<KeyValue> {
+    pub fn list_entries(&self, bag: &EntryKey) -> &Vec<KeyValue> {
         todo!()     // TODO
     }
 
@@ -50,7 +51,7 @@ impl BarKVEngine {
         todo!()     // TODO
     }
 
-    pub fn bag_len(&self) -> usize {
+    pub fn count_bag(&self) -> usize {
         todo!()     // TODO
     }
 
