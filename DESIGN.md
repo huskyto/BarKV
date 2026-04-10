@@ -149,7 +149,7 @@ Header size: 25 bytes.
 Optional header size: 8 bytes;
 
 - crc: [u8; 4]
-- timestamp: i64
+- timestamp: u64
 - flags: u8
 - key_size: u32
 - val_size: u64

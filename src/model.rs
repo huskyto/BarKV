@@ -2,19 +2,17 @@
 use std::fs::File;
 use std::collections::HashMap;
 
-
 pub type EntryKey = String;
 pub type BagKey = String;
 
 
-
-pub struct KeyValue {
-    pub key: EntryKey,
-    pub value: Vec<u8>
-}
-
 pub struct StoreArchive {
     pub bag: HashMap<BagKey, Bag>
+}
+
+pub struct BagRootEntry {
+    pub key: BagKey,
+    pub root_path: String
 }
 
 pub struct Bag {
