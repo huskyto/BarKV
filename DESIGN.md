@@ -114,7 +114,7 @@ Header size: 12 bytes.
 
 #### BagRoot
 
-- name_size: u16,
+- key_size: u16,
 - path_size: u16,
 - name: [u8],
 - path: [u8]

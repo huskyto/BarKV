@@ -30,6 +30,34 @@ pub struct IMEntry {
     pub size: u64
 }
 
+pub struct BaseEntryRebuildData {
+    pub key: String,
+    pub size: u64,
+    pub deleted: bool
+}
+pub struct OffsetEntryRebuildData {
+    pub key: String,
+    pub size: u64,
+    pub offset: u64,
+    pub deleted: bool,
+}
+impl BaseEntryRebuildData {
+    pub fn with_offset(self, offset: u64) -> OffsetEntryRebuildData {
+        OffsetEntryRebuildData {
+            key: self.key,
+            size: self.size,
+            offset,
+            deleted: self.deleted,
+        }
+    }
+}
+
+pub struct BagStoreFileData {
+    pub is_sealed: bool,
+    pub rebuild_data: Vec<OffsetEntryRebuildData>,
+    pub next_file: Option<String>
+}
+
 pub struct KVPair {
     pub key: EntryKey,
     pub value: Vec<u8>
@@ -60,15 +88,6 @@ impl ODIntermediateEntry {
     }
 }
 
-
-#[derive(Debug)]
-pub enum EngineError {
-    IOReadError,
-    IOWriteError,
-    NoSuchKeyError,
-    DeletedEntryError,
-    ExpiredEntryError
-}
 
 // pub struct ODEntry {
 //     pub crc: Vec<u8>,
