@@ -6,13 +6,12 @@ use thiserror::Error;
 use crate::util;
 use crate::model::Bag;
 use crate::model::BagRootEntry;
+use crate::model::StoreArchive;
 use crate::model::BagStoreFileData;
 use crate::model::BaseEntryRebuildData;
 use crate::model::ODIntermediateEntry;
 use crate::model::OffsetEntryRebuildData;
 
-
-const MAGIC_BYTES: [u8; 5] = [0x42, 0x61, 0x72, 0x4B, 0x56];
 
 pub fn decode_store_roots(data: &[u8]) -> Result<Vec<BagRootEntry>, EncodingError> {
     if data.len() < 12 {
@@ -20,7 +19,7 @@ pub fn decode_store_roots(data: &[u8]) -> Result<Vec<BagRootEntry>, EncodingErro
     }
 
     let magic_bytes = &data[..5];
-    if magic_bytes != MAGIC_BYTES {
+    if magic_bytes != util::MAGIC_BYTES {
         return Err(EncodingError::IncorrectMagicBytes)
     }
 
@@ -257,11 +256,13 @@ pub fn get_value_from_entry_data(data: &[u8]) -> Result<Vec<u8>, EncodingError> 
         return Err(EncodingError::CorruptEntry);
     }
 
-    let expiry_bytes: [u8; 8] = data[25..33].try_into()
-            .map_err(|_| EncodingError::SliceCohersionError)?;
-    let expiry_u64 = u64::from_be_bytes(expiry_bytes);
-    if expiry_u64 <= util::current_timestamp() {
-        return Err(EncodingError::ExpiredEntry)
+    if has_expiry {
+        let expiry_bytes: [u8; 8] = data[25..33].try_into()
+                .map_err(|_| EncodingError::SliceCohersionError)?;
+        let expiry_u64 = u64::from_be_bytes(expiry_bytes);
+        if expiry_u64 <= util::current_timestamp() {
+            return Err(EncodingError::ExpiredEntry)
+        }
     }
     
     let value_offset = 25 + expiry_offset as usize + key_size as usize;
@@ -304,15 +305,17 @@ pub fn decode_entry_rebuild_data_from_short_entry(data: &[u8]) -> Result<(Offset
 }
 
 pub fn encode_bag_entry(bag: &Bag) -> Result<Vec<u8>, EncodingError> {
+    let bag_root_path = bag.root_path.to_str()
+            .ok_or(EncodingError::CorruptPath)?;
     let key_size = bag.key.len() as u16;
-    let path_size = bag.root_path.len() as u16;
+    let path_size = bag_root_path.len() as u16;
     let entry_size = 4 + key_size + path_size;
     let mut res = Vec::with_capacity(entry_size as usize);
 
     res.extend_from_slice(&key_size.to_be_bytes());
     res.extend_from_slice(&path_size.to_be_bytes());
     res.extend_from_slice(bag.key.as_bytes());
-    res.extend_from_slice(bag.root_path.as_bytes());
+    res.extend_from_slice(bag_root_path.as_bytes());
 
     Ok(res)
 }
@@ -348,7 +351,41 @@ pub fn encode_od_entry(entry: &ODIntermediateEntry) -> Result<Vec<u8>, EncodingE
     Ok(res)
 }
 
+pub fn encode_store_file(store: &StoreArchive) -> Result<Vec<u8>, EncodingError> {
+    let mut data = Vec::new();
+    data.extend_from_slice(&util::MAGIC_BYTES);
+    data.extend_from_slice(&util::VERSION);
+    data.extend_from_slice(&[0; 4]);      // Reserve for CRC.
 
+    for bag in store.bags.values() {
+        let encoded_bag = encode_bag_root(bag)?;
+        data.extend_from_slice(&encoded_bag);
+    }
+
+    let crc = util::calculate_crc(&data[12..]);
+    data[8..12].copy_from_slice(&crc.to_be_bytes());
+
+    Ok(data)
+}
+
+fn encode_bag_root(bag: &Bag) -> Result<Vec<u8>, EncodingError> {
+    let key = &bag.key;
+    let path = bag.root_path.to_str()
+            .ok_or(EncodingError::CorruptPath)?;
+
+    let key_len: u16 = key.len().try_into()
+            .map_err(|_| EncodingError::IntoU16Failed)?;
+    let path_len: u16 = path.len().try_into()
+            .map_err(|_| EncodingError::IntoU16Failed)?;
+
+    let mut data = Vec::with_capacity(4 + key_len as usize + path_len as usize);
+    data.extend_from_slice(&key_len.to_be_bytes());
+    data.extend_from_slice(&path_len.to_be_bytes());
+    data.extend_from_slice(key.as_bytes());
+    data.extend_from_slice(path.as_bytes());
+
+    Ok(data)
+}
 
 
 #[derive(Debug, Error)]
@@ -373,6 +410,10 @@ pub enum EncodingError {
     CorruptSealHelperFile,
     #[error("Failed to coherse slice into defined size")]
     SliceCohersionError,
+    #[error("Failed to serialize path")]
+    CorruptPath,
+    #[error("Failed to coherce value to u16")]
+    IntoU16Failed,
 
     #[error("Failed to recreate UTF8 String")]
     StringDecodeError(#[from] FromUtf8Error)

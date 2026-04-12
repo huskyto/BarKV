@@ -53,3 +53,11 @@ pub fn overwrite(path: &Path, data: &[u8]) -> Result<(), Error> {
 
     Ok(())
 }
+
+pub fn create_file_to_append(path: &Path) -> Result<File, Error> {
+    OpenOptions::new()
+            .create(true)
+            .append(true)
+            .read(true)
+            .open(path)
+}

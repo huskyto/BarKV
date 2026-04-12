@@ -1,5 +1,6 @@
 
 use std::fs::File;
+use std::path::PathBuf;
 use std::collections::HashMap;
 
 pub type EntryKey = String;
@@ -7,7 +8,7 @@ pub type BagKey = String;
 
 
 pub struct StoreArchive {
-    pub bag: HashMap<BagKey, Bag>
+    pub bags: HashMap<BagKey, Bag>
 }
 
 pub struct BagRootEntry {
@@ -18,14 +19,14 @@ pub struct BagRootEntry {
 pub struct Bag {
     pub key: BagKey,
     pub entries: HashMap<EntryKey, IMEntry>,
-    pub root_path: String,
-    pub active_path: String,
+    pub root_path: PathBuf,
+    pub active_path: PathBuf,
     pub file_handle: File
 }
 
 pub struct IMEntry {
     pub key: EntryKey,
-    pub file: String,
+    pub file: PathBuf,
     pub offset: u64,
     pub size: u64
 }

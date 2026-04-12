@@ -221,13 +221,15 @@ Optional header size: 8 bytes;
 
 - create_bag(bag)
 - drop_bag(bag)
-- count_bag(bag)
+- len_bag(bag)
 - list_bags()
 
 
 ### Lifecycle
 
 - open(path)
+- create(path)
+- open_or_create(path)
 - close()
 - sync()
 - compact()
