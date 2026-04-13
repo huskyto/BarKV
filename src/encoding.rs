@@ -10,8 +10,9 @@ use crate::model::BagRootEntry;
 use crate::model::StoreArchive;
 use crate::model::SealHelperFile;
 use crate::model::BagStoreFileData;
-use crate::model::BaseEntryRebuildData;
+use crate::model::BagStoreFileHeaders;
 use crate::model::ODIntermediateEntry;
+use crate::model::BaseEntryRebuildData;
 use crate::model::OffsetEntryRebuildData;
 use crate::model::BagStoreFileDataIntermediateEntries;
 
@@ -91,13 +92,15 @@ pub fn decode_bag_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingEr
         // currently unused
     let is_deleted = (flags & 0b0000_0001) != 0;
     let is_sealed  = (flags & 0b0000_0010) != 0;
-    let is_archived  = (flags & 0b0000_0100) != 0;
+    let is_locked  = (flags & 0b0000_0100) != 0;
 
     if is_sealed {
         return Ok(BagStoreFileData {
-            is_sealed,
-            is_archived,
-            is_deleted,
+            headers: BagStoreFileHeaders {
+                is_sealed,
+                is_locked,
+                is_deleted,
+            },
             rebuild_data: Vec::new(),
             next_file: None
         });
@@ -113,12 +116,23 @@ pub fn decode_bag_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingEr
     }
 
     Ok(BagStoreFileData {
-        is_sealed,
-        is_archived,
-        is_deleted,
+        headers: BagStoreFileHeaders {
+            is_sealed,
+            is_locked,
+            is_deleted,
+        },
         rebuild_data: rebuild_entries,
         next_file: None,
     })
+}
+
+pub fn decode_bag_store_file_header(data: &[u8]) -> Result<BagStoreFileHeaders, EncodingError> {
+    if data.len() < STORE_FILE_HEADER_SIZE {
+        return Err(EncodingError::SizeMismatch(SizeMismatchType::StoreFile))
+    }
+
+    let flags = data[0];
+    Ok(BagStoreFileHeaders::from_flags(flags))
 }
 
 pub fn decode_seal_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingError> {
@@ -156,9 +170,11 @@ pub fn decode_seal_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingE
 
         // TODO what to do for the actual flags??? they are in the parent file
     Ok(BagStoreFileData {
-        is_sealed: true,
-        is_archived: true,
-        is_deleted: false,
+        headers: BagStoreFileHeaders {
+            is_sealed: true,
+            is_locked: true,
+            is_deleted: false,
+        },
         rebuild_data: rebuild_entries,
         next_file: Some(next_file),
     })
@@ -538,19 +554,19 @@ fn encode_bag_root(bag: &Bag) -> Result<Vec<u8>, EncodingError> {
     Ok(data)
 }
 
-pub fn encode_bag_store_file_header(bag: &BagStoreFileData) -> Result<Vec<u8>, EncodingError> {
+pub fn encode_bag_store_file_header(headers: &BagStoreFileHeaders) -> Result<Vec<u8>, EncodingError> {
     let mut data = Vec::new();
-    let flags = (bag.is_deleted as u8)
-            | ((bag.is_sealed as u8) << 1)
-            | ((bag.is_archived as u8) << 2);
+    let flags = (headers.is_deleted as u8)
+            | ((headers.is_sealed as u8) << 1)
+            | ((headers.is_locked as u8) << 2);
 
     data.push(flags);
     Ok(data)
 }
 
-pub fn encode_bag_store_file_full(header: &BagStoreFileData, entries: &[ODIntermediateEntry])
+pub fn encode_bag_store_file_full(headers: &BagStoreFileHeaders, entries: &[ODIntermediateEntry])
             -> Result<(Vec<u8>, Vec<OffsetEntryRebuildData>), EncodingError> {
-    let encoded_header = encode_bag_store_file_header(header)?;
+    let encoded_header = encode_bag_store_file_header(headers)?;
     let mut data = Vec::new();
     let mut offsets = Vec::new();
     let mut head = STORE_FILE_HEADER_SIZE;

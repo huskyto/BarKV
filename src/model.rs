@@ -72,19 +72,41 @@ impl OffsetEntryRebuildData {
     }
 }
 
-pub struct BagStoreFileData {
+pub struct BagStoreFileHeaders {
     pub is_sealed: bool,
-    pub is_archived: bool,
+    pub is_locked: bool,
     pub is_deleted: bool,
+}
+impl BagStoreFileHeaders {
+    pub fn for_init() -> Self {
+        Self {
+            is_sealed: false,
+            is_locked: false,
+            is_deleted: false,
+        }
+    }
+    pub fn from_flags(flags: u8) -> Self {
+        let is_deleted = (flags & 0b0000_0001) != 0;
+        let is_sealed  = (flags & 0b0000_0010) != 0;
+        let is_locked  = (flags & 0b0000_0100) != 0;
+
+        Self { is_sealed, is_locked,is_deleted, }
+    }
+}
+
+pub struct BagStoreFileData {
+    pub headers: BagStoreFileHeaders,
     pub rebuild_data: Vec<OffsetEntryRebuildData>,
     pub next_file: Option<PathBuf>
 }
 impl BagStoreFileData {
     pub fn for_init() -> Self {
         Self {
-            is_sealed: false,
-            is_archived: false,
-            is_deleted: false,
+            headers: BagStoreFileHeaders {
+                is_sealed: false,
+                is_locked: false,
+                is_deleted: false,
+            },
             rebuild_data: Vec::new(),
             next_file: None,
         }

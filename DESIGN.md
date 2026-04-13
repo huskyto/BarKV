@@ -209,7 +209,7 @@ Optional header size: 16 bytes;
 |Postion|Flag|Note|
 |-------|----|----|
 |0-4|-|Reserved|
-|5|Archived|-|
+|5|Locked|-|
 |6|Sealed|-|
 |7|Deleted|Not currently used|
 
@@ -255,7 +255,7 @@ Optional header size: 16 bytes;
 - open_or_create(path)
 - close()
 - sync()
-- compact()
+- compact_active()
 - full_compaction()
 
 ### Atomic

@@ -68,6 +68,13 @@ pub fn open_file_for_read(path: &Path) -> Result<File, Error> {
             .open(path)
 }
 
+pub fn open_file_to_append(path: &Path) -> Result<File, Error> {
+    OpenOptions::new()
+            .append(true)
+            .read(true)
+            .open(path)
+}
+
 pub fn close_file(file: &mut File) -> Result<(), Error> {
     file.flush()?;
     file.unlock()?;
