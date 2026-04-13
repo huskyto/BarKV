@@ -1,13 +1,16 @@
 
 use std::fs;
 use std::io::Error;
+use std::path::Path;
 use std::path::PathBuf;
 use std::collections::HashMap;
 use thiserror::Error;
 
 use crate::io;
+use crate::util;
 use crate::encoding;
 use crate::encoding::EncodingError;
+use crate::encoding::SizeMismatchType;
 use crate::model::Bag;
 use crate::model::KVPair;
 use crate::model::BagKey;
@@ -90,9 +93,9 @@ impl BarKVEngine {
         Ok(keys)
     }
 
-    pub fn list_entries(&self, bag_key: &BagKey) -> Result<Vec<KVPair>, EngineError> {
-        todo!()     // TODO
-    }
+    // pub fn list_entries(&self, bag_key: &BagKey) -> Result<Vec<KVPair>, EngineError> {
+    //     todo!()
+    // }
 
 
             // BAGS //
@@ -126,16 +129,20 @@ impl BarKVEngine {
     }
 
     pub fn drop_bag(&mut self, bag_key: &BagKey) -> Result<(), EngineError> {
-        if !self.store.bags.contains_key(bag_key) {
-            return Err(EngineError::NoSuchBagKeyError(bag_key.clone()))
-        }
+        let bag = match self.store.bags.remove(bag_key) {
+            Some(b) => b,
+            None => return Err(EngineError::NoSuchBagKeyError(bag_key.clone())),
+        };
 
-        self.store.bags.remove(bag_key);
 
         let encoded_store = encoding::encode_store_file(&self.store)?;
         io::overwrite(&self.get_store_file_path(), &encoded_store)?;
 
-        // TODO delete the chain of bag files.
+                // Remove bag files
+        let bag_files = Self::get_bag_file_chain(&bag)?;
+        for file in bag_files {
+            fs::remove_file(file)?;
+        }
 
         Ok(())
     }
@@ -218,33 +225,136 @@ impl BarKVEngine {
     }
 
 
-            // BATCH OPS // TODO Extension.
+            // BATCH OPS //
 
-    pub fn get_many(bag_key: &BagKey, keys: &[&EntryKey]) -> Result<Vec<KVPair>, EngineError> {
-        todo!()     // TODO
+    pub fn get_many(&mut self, bag_key: &BagKey, keys: &[&EntryKey]) -> Result<Vec<KVPair>, EngineError> {
+        let bag = self.store.bags.get_mut(bag_key)
+                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
+
+        let mut res = Vec::new();
+
+        for &key in keys {
+            let entry = match bag.entries.get(key) {
+                Some(ime) => ime,
+                None => continue,
+            };
+
+            let read_chunk = io::read_chunk(&mut bag.file_handle, entry.offset, entry.size)?;
+            let value = encoding::get_value_from_entry_data(&read_chunk)?;
+
+            res.push(KVPair { key: key.into(), value });
+        }
+
+        Ok(res)
     }
 
-    pub fn set_many(bag_key: &BagKey, pairs: &[KVPair]) -> Result<(), EngineError> {
-        todo!()     // TODO
+    pub fn set_many(&mut self, bag_key: &BagKey, pairs: Vec<KVPair>) -> Result<(), EngineError> {
+        let bag = self.store.bags.get_mut(bag_key)
+                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
+
+        for pair in pairs {
+            let key = pair.key.clone();
+
+            let od_in_entry = ODIntermediateEntry::make_update(key.clone(), pair.value);
+            let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
+            let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
+
+            let im_entry = IMEntry {
+                key: key.clone(),
+                file: bag.active_path.clone(),
+                offset,
+                size: encoded_entry.len() as u64,
+            };
+
+            bag.entries.insert(key, im_entry);
+        }
+
+        Ok(())
     }
 
-    pub fn delete_many(bag_key: &BagKey, keys: &[&EntryKey]) -> Result<(), EngineError> {
-        todo!()     // TODO
-    }
+    pub fn delete_many(&mut self, bag_key: &BagKey, keys: &[&EntryKey]) -> Result<(), EngineError> {
+        let bag = self.store.bags.get_mut(bag_key)
+                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
 
-
-            // TTL // TODO Extension. Maybe.
+        for &key in keys {
+            if !bag.entries.contains_key(key) {
+                continue;
+            }
     
-    pub fn set_with_expiry(bag_key: &BagKey, key: &EntryKey, value: &[u8], ttl: u128) -> Result<(), EngineError>{
-        todo!()     // TODO
+            let od_in_entry = ODIntermediateEntry::make_tombstone(key.into());
+            let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
+            io::append(&mut bag.file_handle, &encoded_entry)?;
+    
+            bag.entries.remove(key);
+        }
+
+        Ok(())
     }
 
-    pub fn ttl(bag_key: &BagKey, key: &EntryKey) -> Result<u128, EngineError> {
-        todo!()     // TODO
+
+            // TTL
+    
+    pub fn set_with_expiry(&mut self, bag_key: &BagKey, key: &EntryKey, value: &[u8], ttl: u128) -> Result<(), EngineError>{
+        let bag = self.store.bags.get_mut(bag_key)
+                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
+
+        let expiry = util::current_timestamp() + ttl;
+        let od_in_entry = ODIntermediateEntry::make_expiring(key.into(), value.to_vec(), expiry);
+        let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
+        let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
+
+        let im_entry = IMEntry {
+            key: key.into(),
+            file: bag.active_path.clone(),
+            offset,
+            size: encoded_entry.len() as u64,
+        };
+
+        bag.entries.insert(key.clone(), im_entry);
+
+        Ok(())
     }
 
-    pub fn persist(bag_key: &BagKey, key: &EntryKey) -> Result<(), EngineError> {
-        todo!()     // TODO
+    pub fn ttl(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<u128, EngineError> {
+        let bag = self.store.bags.get_mut(bag_key)
+                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
+        let entry = bag.entries.get(key)
+                .ok_or_else(|| EngineError::NoSuchEntryKeyError(key.to_string()))?;
+
+        let header_size = encoding::KV_ENTRY_HEADER_BASE_SIZE + 8;
+        if entry.size < header_size as u64 {
+            return Err(EncodingError::SizeMismatch(SizeMismatchType::OnDiskEntry))?
+        }
+
+        let read_chunk = io::read_chunk(&mut bag.file_handle, entry.offset, entry.size)?;
+        let expiry = encoding::get_expiry_entry_data(&read_chunk)?;
+
+        Ok(expiry)
+    }
+
+    pub fn persist(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<(), EngineError> {
+        let bag = self.store.bags.get_mut(bag_key)
+                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
+        let entry = bag.entries.get(key)
+                .ok_or_else(|| EngineError::NoSuchEntryKeyError(key.to_string()))?;
+
+        let read_chunk = io::read_chunk(&mut bag.file_handle, entry.offset, entry.size)?;
+        let value = encoding::get_value_from_entry_data(&read_chunk)?;
+
+        let od_in_entry = ODIntermediateEntry::make_update(key.into(), value);
+        let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
+        let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
+
+        let im_entry = IMEntry {
+            key: key.into(),
+            file: bag.active_path.clone(),
+            offset,
+            size: encoded_entry.len() as u64,
+        };
+
+        bag.entries.insert(key.clone(), im_entry);
+
+        Ok(())
     }
 
 
@@ -267,6 +377,46 @@ impl BarKVEngine {
 
     fn get_store_file_path(&self) -> PathBuf {
         self.root_path.join(STORE_FILENAME)
+    }
+
+    fn get_bag_file_chain(bag: &Bag) -> Result<Vec<PathBuf>, EngineError> {
+        let mut res = Vec::new();
+        res.push(bag.root_path.clone());
+        let mut root_file = io::open_file_for_read(&bag.root_path)?;
+        let data = io::read_chunk(&mut root_file, 0, encoding::STORE_FILE_HEADER_SIZE as u64)?;
+        let decoded = encoding::decode_bag_store_file(&data)?;
+        let mut next_file = if decoded.is_sealed {
+            Some(Self::get_sealed_file_path(&bag.root_path))
+        } else { None };
+
+        while let Some(next) = &next_file {
+            res.push(next.clone());
+            let is_sealed = Self::is_file_seal(&next);
+            let mut file_handle = io::open_file_for_read(&next)?;
+            if is_sealed {
+                let seal_data = io::read_chunk(&mut file_handle,
+                        0, encoding::SEAL_HELPER_FILE_HEADER_SIZE as u64)?;
+                let decoded_seal = encoding::decode_seal_store_file(&seal_data)?;
+                next_file = decoded_seal.next_file;
+            }
+            else {
+                let data = io::read_chunk(&mut file_handle, 0, encoding::STORE_FILE_HEADER_SIZE as u64)?;
+                let decoded = encoding::decode_bag_store_file(&data)?;
+                next_file = if decoded.is_sealed {
+                    Some(Self::get_sealed_file_path(&next))
+                } else { None };
+            }
+        }
+
+        Ok(res)
+    }
+
+    fn get_sealed_file_path(base_file_path: &Path) -> PathBuf {
+        base_file_path.with_extension("seal")
+    }
+
+    fn is_file_seal(path: &Path) -> bool {
+        path.extension().is_some_and(|ext| ext == "seal")
     }
 
 }

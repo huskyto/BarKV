@@ -56,7 +56,7 @@ impl BaseEntryRebuildData {
 pub struct BagStoreFileData {
     pub is_sealed: bool,
     pub rebuild_data: Vec<OffsetEntryRebuildData>,
-    pub next_file: Option<String>
+    pub next_file: Option<PathBuf>
 }
 
 pub struct KVPair {
@@ -67,7 +67,7 @@ pub struct KVPair {
 pub struct ODIntermediateEntry {
     pub key: EntryKey,
     pub value: Vec<u8>,
-    pub expiry: Option<u64>,
+    pub expiry: Option<u128>,
     pub is_tombstone: bool,
 }
 impl ODIntermediateEntry {
@@ -87,16 +87,14 @@ impl ODIntermediateEntry {
             is_tombstone: false,
         }
     }
+    pub fn make_expiring(key: EntryKey, value: Vec<u8>, expiry: u128) -> Self {
+        Self {
+            key,
+            value,
+            expiry: Some(expiry),
+            is_tombstone: false,
+        }
+    }
 }
 
 
-// pub struct ODEntry {
-//     pub crc: Vec<u8>,
-//     pub timestamp: u128,
-//     pub flags: u8,
-//     pub key_size: u32,
-//     pub val_size: u64,
-//     pub expiry: Option<u64>
-//     pub key: EntryKey,
-//     pub value: String,
-// }

@@ -61,3 +61,9 @@ pub fn create_file_to_append(path: &Path) -> Result<File, Error> {
             .read(true)
             .open(path)
 }
+
+pub fn open_file_for_read(path: &Path) -> Result<File, Error> {
+    OpenOptions::new()
+            .read(true)
+            .open(path)
+}

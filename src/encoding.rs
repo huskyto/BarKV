@@ -1,4 +1,5 @@
 
+use std::path::PathBuf;
 use std::string::FromUtf8Error;
 
 use thiserror::Error;
@@ -12,6 +13,10 @@ use crate::model::BaseEntryRebuildData;
 use crate::model::ODIntermediateEntry;
 use crate::model::OffsetEntryRebuildData;
 
+
+pub const STORE_FILE_HEADER_SIZE: usize = 5;
+pub const SEAL_HELPER_FILE_HEADER_SIZE: usize = 6;
+pub const KV_ENTRY_HEADER_BASE_SIZE: usize = 25;
 
 pub fn decode_store_roots(data: &[u8]) -> Result<Vec<BagRootEntry>, EncodingError> {
     if data.len() < 12 {
@@ -44,7 +49,7 @@ pub fn decode_store_roots(data: &[u8]) -> Result<Vec<BagRootEntry>, EncodingErro
     Ok(roots)
 }
 
-pub fn decode_bag_root_entry(data: &[u8]) -> Result<(BagRootEntry, usize), EncodingError> {
+fn decode_bag_root_entry(data: &[u8]) -> Result<(BagRootEntry, usize), EncodingError> {
     if data.len() < 4 {
         return Err(EncodingError::SizeMismatch(SizeMismatchType::BagRootEntry))
     }
@@ -75,7 +80,7 @@ pub fn decode_bag_root_entry(data: &[u8]) -> Result<(BagRootEntry, usize), Encod
 }
 
 pub fn decode_bag_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingError> {
-    if data.len() < 5 {
+    if data.len() < STORE_FILE_HEADER_SIZE {
         return Err(EncodingError::SizeMismatch(SizeMismatchType::StoreFile))
     }
 
@@ -100,7 +105,7 @@ pub fn decode_bag_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingEr
     }
 
     let mut rebuild_entries = Vec::new();
-    let mut head = 5;
+    let mut head = STORE_FILE_HEADER_SIZE;
     while head < data.len() {
         let rebuild_data = decode_entry_rebuild_data(&data[head..])?;
         let offset = head as u64;
@@ -116,7 +121,8 @@ pub fn decode_bag_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingEr
 }
 
 pub fn decode_seal_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingError> {
-    if data.len() < 6 {
+    let header_size = SEAL_HELPER_FILE_HEADER_SIZE;
+    if data.len() < header_size {
         return Err(EncodingError::SizeMismatch(SizeMismatchType::SealHelperFile))
     }
 
@@ -130,16 +136,17 @@ pub fn decode_seal_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingE
     let nf_size_bytes = [data[4], data[5]];
     let nf_size = u16::from_be_bytes(nf_size_bytes);
 
-    if data.len() < 6 + nf_size as usize {
+    if data.len() < header_size + nf_size as usize {
         return Err(EncodingError::SizeMismatch(SizeMismatchType::SealHelperFile))
     }
 
-    let nf_bytes = &data[6..6 + nf_size as usize];
-    let next_file = String::from_utf8(nf_bytes.to_vec())
+    let nf_bytes = &data[header_size..header_size + nf_size as usize];
+    let next_file_str = String::from_utf8(nf_bytes.to_vec())
             .map_err(EncodingError::StringDecodeError)?;
+    let next_file = PathBuf::from(next_file_str);
 
     let mut rebuild_entries = Vec::new();
-    let mut head = 6 + nf_size as usize;
+    let mut head = header_size + nf_size as usize;
     while head < data.len() {
         let (rebuild_data, offset) = decode_entry_rebuild_data_from_short_entry(&data[head..])?;
         head += offset;
@@ -153,7 +160,7 @@ pub fn decode_seal_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingE
     })
 }
 
-pub fn decode_entry_rebuild_data(data: &[u8]) -> Result<BaseEntryRebuildData, EncodingError> {
+fn decode_entry_rebuild_data(data: &[u8]) -> Result<BaseEntryRebuildData, EncodingError> {
     if data.len() < 25 {
         return Err(EncodingError::SizeMismatch(SizeMismatchType::OnDiskEntry))
     }
@@ -172,7 +179,7 @@ pub fn decode_entry_rebuild_data(data: &[u8]) -> Result<BaseEntryRebuildData, En
     let is_deleted = (flags & 0b0000_0001) != 0;
     let has_expiry = (flags & 0b0000_0010) != 0;
 
-    let expiry_offset = if has_expiry { 8 } else { 0 };
+    let expiry_offset = if has_expiry { 16 } else { 0 };
 
     let key_size_bytes: [u8; 4] = data[13..17].try_into()
             .map_err(|_| EncodingError::SliceCohersionError)?;
@@ -197,6 +204,16 @@ pub fn decode_entry_rebuild_data(data: &[u8]) -> Result<BaseEntryRebuildData, En
     if header_crc != real_crc.to_be_bytes() {
         return Err(EncodingError::CorruptEntry)
     }
+
+    // if has_expiry {
+    //     let expiry_bytes: [u8; 16] = data[25..41].try_into()
+    //             .map_err(|_| EncodingError::SliceCohersionError)?;
+    //     let expiry_u128 = u128::from_be_bytes(expiry_bytes);
+    //     if expiry_u128 <= util::current_timestamp() {
+    //         // return Err(EncodingError::ExpiredEntry)
+    //         is_deleted = true
+    //     }
+    // }
     
     let key_offset = 25 + expiry_offset as usize;
     let key_bytes = &data[key_offset..key_offset + key_size as usize];
@@ -213,7 +230,7 @@ pub fn decode_entry_rebuild_data(data: &[u8]) -> Result<BaseEntryRebuildData, En
 }
 
 pub fn get_value_from_entry_data(data: &[u8]) -> Result<Vec<u8>, EncodingError> {
-    if data.len() < 25 {
+    if data.len() < KV_ENTRY_HEADER_BASE_SIZE {
         return Err(EncodingError::SizeMismatch(SizeMismatchType::OnDiskEntry))
     }
 
@@ -230,7 +247,7 @@ pub fn get_value_from_entry_data(data: &[u8]) -> Result<Vec<u8>, EncodingError> 
         return Err(EncodingError::DeletedEntry);
     }
 
-    let expiry_offset = if has_expiry { 8 } else { 0 };
+    let expiry_offset = if has_expiry { 16 } else { 0 };
 
     let key_size_bytes: [u8; 4] = data[13..17].try_into()
             .map_err(|_| EncodingError::SliceCohersionError)?;
@@ -257,10 +274,10 @@ pub fn get_value_from_entry_data(data: &[u8]) -> Result<Vec<u8>, EncodingError> 
     }
 
     if has_expiry {
-        let expiry_bytes: [u8; 8] = data[25..33].try_into()
+        let expiry_bytes: [u8; 16] = data[25..41].try_into()
                 .map_err(|_| EncodingError::SliceCohersionError)?;
-        let expiry_u64 = u64::from_be_bytes(expiry_bytes);
-        if expiry_u64 <= util::current_timestamp() {
+        let expiry_u128 = u128::from_be_bytes(expiry_bytes);
+        if expiry_u128 <= util::current_timestamp() {
             return Err(EncodingError::ExpiredEntry)
         }
     }
@@ -271,8 +288,7 @@ pub fn get_value_from_entry_data(data: &[u8]) -> Result<Vec<u8>, EncodingError> 
     Ok(value_bytes.to_vec())
 }
 
-
-pub fn decode_entry_rebuild_data_from_short_entry(data: &[u8]) -> Result<(OffsetEntryRebuildData, usize), EncodingError> {
+fn decode_entry_rebuild_data_from_short_entry(data: &[u8]) -> Result<(OffsetEntryRebuildData, usize), EncodingError> {
     if data.len() < 20 {
         return Err(EncodingError::SizeMismatch(SizeMismatchType::ShortEntry))
     }
@@ -304,6 +320,34 @@ pub fn decode_entry_rebuild_data_from_short_entry(data: &[u8]) -> Result<(Offset
     Ok((data, 20 + key_size as usize))
 }
 
+
+pub fn get_expiry_entry_data(data: &[u8]) -> Result<u128, EncodingError> {
+    if data.len() < KV_ENTRY_HEADER_BASE_SIZE + 16 {
+        return Err(EncodingError::SizeMismatch(SizeMismatchType::OnDiskEntry))
+    }
+
+    let flags = data[12];
+    let is_deleted = (flags & 0b0000_0001) != 0;
+    let has_expiry = (flags & 0b0000_0010) != 0;
+
+    if is_deleted {
+        return Err(EncodingError::DeletedEntry);
+    }
+
+    if !has_expiry {
+        return Err(EncodingError::NotExpiringEntry)
+    }
+
+    let expiry_bytes: [u8; 16] = data[25..41].try_into()
+            .map_err(|_| EncodingError::SliceCohersionError)?;
+    let expiry_u128 = u128::from_be_bytes(expiry_bytes);
+    if expiry_u128 <= util::current_timestamp() {
+        return Err(EncodingError::ExpiredEntry)
+    }
+
+    Ok(expiry_u128)
+}
+
 pub fn encode_bag_entry(bag: &Bag) -> Result<Vec<u8>, EncodingError> {
     let bag_root_path = bag.root_path.to_str()
             .ok_or(EncodingError::CorruptPath)?;
@@ -329,7 +373,7 @@ pub fn encode_od_entry(entry: &ODIntermediateEntry) -> Result<Vec<u8>, EncodingE
     let timestamp = util::current_timestamp();
     let mut entry_size = 25 + key_size as u64 + val_size;
     if has_expiry {
-        entry_size += 8;
+        entry_size += 16;
     }
 
     let mut res = Vec::with_capacity(entry_size as usize);
@@ -406,6 +450,8 @@ pub enum EncodingError {
     ExpiredEntry,
     #[error("Requested entry is deleted")]
     DeletedEntry,
+    #[error("Queried 'expiry' on non-expiring entry")]
+    NotExpiringEntry,
     #[error("Seal Helper file header CRC does not match real CRC")]
     CorruptSealHelperFile,
     #[error("Failed to coherse slice into defined size")]

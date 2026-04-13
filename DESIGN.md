@@ -146,14 +146,14 @@ Very simple high level container.
 ### On Disk Entry
 
 Header size: 25 bytes.
-Optional header size: 8 bytes;
+Optional header size: 16 bytes;
 
 - crc: [u8; 4]
 - timestamp: u64
 - flags: u8
 - key_size: u32
 - val_size: u64
-- expiry: u64  (Optional)
+- expiry: u128  (Optional)
 - key: [u8]
 - value: [u8]
 
@@ -164,7 +164,7 @@ Optional header size: 8 bytes;
 |flags|   1|-   |
 |key_size|4|Big Endian|
 |val_size|8|Big Endian|
-|expiry|8|Optional|
+|expiry|16|Optional|
 |key  |-   |Serialized|
 |value|-   |Binary|
 ||||
@@ -215,7 +215,7 @@ Optional header size: 8 bytes;
 - delete(bag, key)
 - exists(bag, key)
 - list_keys(bag)
-- list_entries(bag)
+- ~~list_entries(bag)~~ -> Better to use batch and be explicit about query cost.
 
 ### Bags
 
@@ -242,11 +242,15 @@ Optional header size: 8 bytes;
 
 ### Batch
 
+If keys are missing in the store, they will be ignored instead of throwing errors.
+
 - get_many(bag, keys)
 - set_many(bag, kv_pairs)
 - delete_many(bag, keys)
 
 ### TTL
+
+Regular "set" will remove expiry.
 
 - set_with_expiry(bag, key, value, ttl)
 - ttl(bag, key)
