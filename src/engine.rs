@@ -17,6 +17,8 @@ use crate::model::BagKey;
 use crate::model::IMEntry;
 use crate::model::EntryKey;
 use crate::model::StoreArchive;
+use crate::model::SealHelperFile;
+use crate::model::BagStoreFileData;
 use crate::model::ODIntermediateEntry;
 
 
@@ -37,7 +39,12 @@ impl BarKVEngine {
         let entry = bag.entries.get(key)
                 .ok_or_else(|| EngineError::NoSuchEntryKeyError(key.to_string()))?;
 
-        let read_chunk = io::read_chunk(&mut bag.file_handle, entry.offset, entry.size)?;
+        let read_chunk = if entry.file == bag.active_path {
+            io::read_chunk(&mut bag.file_handle, entry.offset, entry.size)?
+        } else {
+            let mut file_handle = io::open_file_for_read(&entry.file)?;
+            io::read_chunk(&mut file_handle, entry.offset, entry.size)?
+        };
         let value = encoding::get_value_from_entry_data(&read_chunk)?;
 
         Ok(value)
@@ -111,14 +118,22 @@ impl BarKVEngine {
 
         let bag_filename = format!("{bag_key}-0.bkv");
         let bag_root_path = self.root_path.join(bag_filename);
-        let file_handle = io::create_file_to_append(&bag_root_path)?;
+        let mut file_handle = io::create_file_to_append(&bag_root_path)?;
+
+                // Init bag store file with header
+        let header_data = BagStoreFileData::for_init();
+        let header = encoding::encode_bag_store_file_header(&header_data)?;
+        io::write_all(&mut file_handle, &header)?;
+
         let new_bag = Bag {
             key: bag_key.clone(),
             entries: HashMap::new(),
             root_path: bag_root_path.clone(),
             active_path: bag_root_path,
             file_handle,
+            current_file_id: 0,
         };
+
         self.store.bags.insert(bag_key.clone(), new_bag);
 
                 // Update the store file.
@@ -209,6 +224,10 @@ impl BarKVEngine {
         todo!()     // TODO
     }
 
+    pub fn full_compaction(&mut self) {
+
+    }
+
 
             // ATOMIC // TODO extension.
     
@@ -239,7 +258,12 @@ impl BarKVEngine {
                 None => continue,
             };
 
-            let read_chunk = io::read_chunk(&mut bag.file_handle, entry.offset, entry.size)?;
+            let read_chunk = if entry.file == bag.active_path {
+                io::read_chunk(&mut bag.file_handle, entry.offset, entry.size)?
+            } else {
+                let mut file_handle = io::open_file_for_read(&entry.file)?;
+                io::read_chunk(&mut file_handle, entry.offset, entry.size)?
+            };
             let value = encoding::get_value_from_entry_data(&read_chunk)?;
 
             res.push(KVPair { key: key.into(), value });
@@ -326,7 +350,12 @@ impl BarKVEngine {
             return Err(EncodingError::SizeMismatch(SizeMismatchType::OnDiskEntry))?
         }
 
-        let read_chunk = io::read_chunk(&mut bag.file_handle, entry.offset, entry.size)?;
+        let read_chunk = if entry.file == bag.active_path {
+            io::read_chunk(&mut bag.file_handle, entry.offset, entry.size)?
+        } else {
+            let mut file_handle = io::open_file_for_read(&entry.file)?;
+            io::read_chunk(&mut file_handle, entry.offset, entry.size)?
+        };        
         let expiry = encoding::get_expiry_entry_data(&read_chunk)?;
 
         Ok(expiry)
@@ -338,7 +367,12 @@ impl BarKVEngine {
         let entry = bag.entries.get(key)
                 .ok_or_else(|| EngineError::NoSuchEntryKeyError(key.to_string()))?;
 
-        let read_chunk = io::read_chunk(&mut bag.file_handle, entry.offset, entry.size)?;
+        let read_chunk = if entry.file == bag.active_path {
+            io::read_chunk(&mut bag.file_handle, entry.offset, entry.size)?
+        } else {
+            let mut file_handle = io::open_file_for_read(&entry.file)?;
+            io::read_chunk(&mut file_handle, entry.offset, entry.size)?
+        };
         let value = encoding::get_value_from_entry_data(&read_chunk)?;
 
         let od_in_entry = ODIntermediateEntry::make_update(key.into(), value);
@@ -360,18 +394,18 @@ impl BarKVEngine {
 
             // STATE // TODO Extension.
     
-    pub fn stats() {
+    pub fn stats(&self) {
         todo!()     // TODO Stats model
     }
 
-    pub fn validate() {
+    pub fn validate(&self) {
         todo!()     // TODO check crcs
     }
 
 
             // INTERNAL //
     
-    fn seal(bag_key: &BagKey) -> Result<String, EngineError> {
+    fn seal(&mut self, bag_key: &BagKey) -> Result<String, EngineError> {
         todo!()
     }
 
@@ -417,6 +451,80 @@ impl BarKVEngine {
 
     fn is_file_seal(path: &Path) -> bool {
         path.extension().is_some_and(|ext| ext == "seal")
+    }
+
+    fn compact_partial(&self, bag: &mut Bag) -> Result<(), EngineError> {
+        let path = &bag.active_path;
+
+        let mut file_handle = io::open_file_for_read(path)?;
+        let data = io::read_all_file(&mut file_handle)?;
+        io::close_file(&mut file_handle)?;
+        let decode_data = encoding::decode_bag_store_file_int_entries(&data)?;
+        let current_timestamp_millis = util::current_timestamp();
+        let mut entries_map = HashMap::new();
+
+        for entry in decode_data.int_entries {
+            if entry.is_tombstone {
+                    // Maintain tombstone regardless on partial compaction
+                entries_map.insert(entry.key.clone(), entry);
+            }
+            else if let Some(expiry) = entry.expiry && expiry <= current_timestamp_millis  {
+                entries_map.insert(entry.key.clone(), entry.to_tombstone());
+            }
+            else {
+                entries_map.insert(entry.key.clone(), entry);
+            }
+        }
+
+        let header = BagStoreFileData {
+            is_sealed: false,
+            is_archived: true,
+            is_deleted: false,
+            rebuild_data: Vec::new(),
+            next_file: None,
+        };
+        let entries: Vec<ODIntermediateEntry> = entries_map.into_values().collect();
+        let (bag_store_data, offset_data) = encoding::encode_bag_store_file_full(&header, &entries)?;
+        io::overwrite(path, &bag_store_data)?;
+
+                // Update IMEntries
+
+        bag.entries.retain(|_, ime| &ime.file != path);
+        
+        for offset_entry in &offset_data {
+            let updated_im_entry = offset_entry.to_im_entry(path);
+            bag.entries.insert(offset_entry.key.clone(), updated_im_entry);
+        }
+
+                // Create sealed helper file
+        let next_file_path = self.build_bag_path(&bag.key, bag.current_file_id + 1);
+        let seal_helper_data = SealHelperFile {
+            next_file: next_file_path.clone(),
+            entries: offset_data,
+        };
+        let encoded_seal_file = encoding::encode_seal_helper_file(&seal_helper_data)?;
+        let seal_file_path = Self::get_sealed_file_path(path);
+        let mut seal_file_handle = io::create_file_to_append(&seal_file_path)?;
+        io::write_all(&mut seal_file_handle, &encoded_seal_file)?;
+        io::close_file(&mut seal_file_handle)?;
+
+                // Update Bag
+        let mut next_file_handle = io::create_file_to_append(&next_file_path)?;
+        bag.current_file_id += 1;
+        bag.active_path = next_file_path;
+
+        let header_data = BagStoreFileData::for_init();
+        let header = encoding::encode_bag_store_file_header(&header_data)?;
+        io::write_all(&mut next_file_handle, &header)?;
+
+        bag.file_handle = next_file_handle;
+
+        Ok(())
+    }
+
+    fn build_bag_path(&self, bag_key: &BagKey, file_id: usize) -> PathBuf {
+        let bag_filename = format!("{bag_key}-{file_id}.bkv");
+        self.root_path.join(bag_filename)
     }
 
 }

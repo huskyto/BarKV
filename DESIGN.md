@@ -62,14 +62,30 @@ The compacted data will be written to a new file, which will then replace the cu
 
 Only active store files will be compacted. Previous files are considered archived and sealed, and compaction will run on them before they are sealed; once sealed they will not be touched again.
 
-### File Sealing
+### File Locking
 
-Once an active file grows too large (soft limit can be configured. Default is 10 MB), it will be **sealed** as follows:
+Once an active file grows too large (soft limit can be configured. Default is 10 MB), it will be **locked** as follows:
 
 1. No new entries will be added to the file.
-2. The file will be compacted.
+2. The file will be partially compacted.
 3. A helper file with a **.seal** extension will be created. Description on next section.
 4. A new **active** file will be created.
+
+### Seal Helper File
+
+The helper file is created when a file is **locked**, and will have the name of the original file with a **.seal** extension. It may be modified when a store file gets finally **sealed**.
+
+It includes:
+
+- CRC for integrity check.
+- Key-Offset-Size entries for faster In Memory Index rebuild.
+- Path of the next store file.
+
+### File Sealing
+
+If a full compaction is run, files that were previously **locked** will be finalized and immutable, and the **sealed** flag will be turned on.
+
+The Seal Helper File corresponding to his file may be modified during full compaction, but will afterwards also become immutable.
 
 ### Seal Helper File
 
@@ -80,6 +96,12 @@ It includes:
 - CRC for integrity check.
 - Key-Offset-Size entries for faster In Memory Index rebuild.
 - Path of the next file.
+
+### Partial Compaction vs Full Compaction
+
+**Partial Compaction** runs for a single store file, with the limited information in it. It will leave trailing tombstones as a safeguard for entries that may have been declared in previous store files.
+
+**Full Compation** Runs for the whole store history. After it's done, any **sealed** files will become immutable, and compaction will be maximized, removing all redundant information.
 
 ### In Memory Index Rebuild
 
@@ -178,7 +200,7 @@ Optional header size: 16 bytes;
 
 ### Store Files
 
-- crc: [u8; 4]
+- ~~crc: [u8; 4]~~
 - flags: u8
 - entries: [OnDiskEntry]
 
@@ -186,7 +208,8 @@ Optional header size: 16 bytes;
 
 |Postion|Flag|Note|
 |-------|----|----|
-|0-5|-|Reserved|
+|0-4|-|Reserved|
+|5|Archived|-|
 |6|Sealed|-|
 |7|Deleted|Not currently used|
 
@@ -233,6 +256,7 @@ Optional header size: 16 bytes;
 - close()
 - sync()
 - compact()
+- full_compaction()
 
 ### Atomic
 

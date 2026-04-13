@@ -1,7 +1,10 @@
 
 use std::fs::File;
+use std::path::Path;
 use std::path::PathBuf;
 use std::collections::HashMap;
+
+use crate::util;
 
 pub type EntryKey = String;
 pub type BagKey = String;
@@ -21,7 +24,13 @@ pub struct Bag {
     pub entries: HashMap<EntryKey, IMEntry>,
     pub root_path: PathBuf,
     pub active_path: PathBuf,
-    pub file_handle: File
+    pub file_handle: File,
+    pub current_file_id: usize
+}
+
+pub struct SealHelperFile {
+    pub next_file: PathBuf,
+    pub entries: Vec<OffsetEntryRebuildData>
 }
 
 pub struct IMEntry {
@@ -36,12 +45,6 @@ pub struct BaseEntryRebuildData {
     pub size: u64,
     pub deleted: bool
 }
-pub struct OffsetEntryRebuildData {
-    pub key: String,
-    pub size: u64,
-    pub offset: u64,
-    pub deleted: bool,
-}
 impl BaseEntryRebuildData {
     pub fn with_offset(self, offset: u64) -> OffsetEntryRebuildData {
         OffsetEntryRebuildData {
@@ -52,12 +55,47 @@ impl BaseEntryRebuildData {
         }
     }
 }
+pub struct OffsetEntryRebuildData {
+    pub key: String,
+    pub size: u64,
+    pub offset: u64,
+    pub deleted: bool,
+}
+impl OffsetEntryRebuildData {
+    pub fn to_im_entry(&self, file: &Path) -> IMEntry {
+        IMEntry {
+            key: self.key.clone(),
+            file: file.into(),
+            offset: self.offset,
+            size: self.size,
+        }
+    }
+}
 
 pub struct BagStoreFileData {
     pub is_sealed: bool,
+    pub is_archived: bool,
+    pub is_deleted: bool,
     pub rebuild_data: Vec<OffsetEntryRebuildData>,
     pub next_file: Option<PathBuf>
 }
+impl BagStoreFileData {
+    pub fn for_init() -> Self {
+        Self {
+            is_sealed: false,
+            is_archived: false,
+            is_deleted: false,
+            rebuild_data: Vec::new(),
+            next_file: None,
+        }
+    }
+}
+
+pub struct BagStoreFileDataIntermediateEntries {
+    pub flags: u8,
+    pub int_entries: Vec<ODIntermediateEntry>,
+}
+
 
 pub struct KVPair {
     pub key: EntryKey,
@@ -69,6 +107,7 @@ pub struct ODIntermediateEntry {
     pub value: Vec<u8>,
     pub expiry: Option<u128>,
     pub is_tombstone: bool,
+    pub timestamp: u64
 }
 impl ODIntermediateEntry {
     pub fn make_tombstone(key: EntryKey) -> Self {
@@ -77,6 +116,7 @@ impl ODIntermediateEntry {
             value: Vec::new(),
             expiry: None,
             is_tombstone: true,
+            timestamp: util::current_timestamp_sec()
         }
     }
     pub fn make_update(key: EntryKey, value: Vec<u8>) -> Self {
@@ -85,6 +125,7 @@ impl ODIntermediateEntry {
             value,
             expiry: None,
             is_tombstone: false,
+            timestamp: util::current_timestamp_sec()
         }
     }
     pub fn make_expiring(key: EntryKey, value: Vec<u8>, expiry: u128) -> Self {
@@ -93,6 +134,16 @@ impl ODIntermediateEntry {
             value,
             expiry: Some(expiry),
             is_tombstone: false,
+            timestamp: util::current_timestamp_sec()
+        }
+    }
+    pub fn to_tombstone(self) -> Self {
+        Self {
+            key: self.key,
+            value: Vec::new(),
+            expiry: None,
+            is_tombstone: true,
+            timestamp: util::current_timestamp_sec()
         }
     }
 }

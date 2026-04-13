@@ -67,3 +67,10 @@ pub fn open_file_for_read(path: &Path) -> Result<File, Error> {
             .read(true)
             .open(path)
 }
+
+pub fn close_file(file: &mut File) -> Result<(), Error> {
+    file.flush()?;
+    file.unlock()?;
+    Ok(())
+}
+

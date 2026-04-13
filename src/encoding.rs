@@ -8,15 +8,18 @@ use crate::util;
 use crate::model::Bag;
 use crate::model::BagRootEntry;
 use crate::model::StoreArchive;
+use crate::model::SealHelperFile;
 use crate::model::BagStoreFileData;
 use crate::model::BaseEntryRebuildData;
 use crate::model::ODIntermediateEntry;
 use crate::model::OffsetEntryRebuildData;
+use crate::model::BagStoreFileDataIntermediateEntries;
 
 
-pub const STORE_FILE_HEADER_SIZE: usize = 5;
+pub const STORE_FILE_HEADER_SIZE: usize = 1;
 pub const SEAL_HELPER_FILE_HEADER_SIZE: usize = 6;
 pub const KV_ENTRY_HEADER_BASE_SIZE: usize = 25;
+pub const SHORT_ENTRY_HEADER_SIZE: usize = 20;
 
 pub fn decode_store_roots(data: &[u8]) -> Result<Vec<BagRootEntry>, EncodingError> {
     if data.len() < 12 {
@@ -84,21 +87,17 @@ pub fn decode_bag_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingEr
         return Err(EncodingError::SizeMismatch(SizeMismatchType::StoreFile))
     }
 
-    let header_crc = &data[0..4];
-    let real_crc = util::calculate_crc(&data[4..]);
-
-    if header_crc != real_crc.to_be_bytes() {
-        return Err(EncodingError::CorruptStore)
-    }
-
-    let flags = data[4];
+    let flags = data[0];
         // currently unused
-    // let is_deleted = (flags & 0b0000_0001) != 0;
+    let is_deleted = (flags & 0b0000_0001) != 0;
     let is_sealed  = (flags & 0b0000_0010) != 0;
+    let is_archived  = (flags & 0b0000_0100) != 0;
 
     if is_sealed {
         return Ok(BagStoreFileData {
             is_sealed,
+            is_archived,
+            is_deleted,
             rebuild_data: Vec::new(),
             next_file: None
         });
@@ -115,8 +114,10 @@ pub fn decode_bag_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingEr
 
     Ok(BagStoreFileData {
         is_sealed,
+        is_archived,
+        is_deleted,
         rebuild_data: rebuild_entries,
-        next_file: None
+        next_file: None,
     })
 }
 
@@ -153,15 +154,18 @@ pub fn decode_seal_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingE
         rebuild_entries.push(rebuild_data);
     }
 
+        // TODO what to do for the actual flags??? they are in the parent file
     Ok(BagStoreFileData {
         is_sealed: true,
+        is_archived: true,
+        is_deleted: false,
         rebuild_data: rebuild_entries,
         next_file: Some(next_file),
     })
 }
 
 fn decode_entry_rebuild_data(data: &[u8]) -> Result<BaseEntryRebuildData, EncodingError> {
-    if data.len() < 25 {
+    if data.len() < KV_ENTRY_HEADER_BASE_SIZE {
         return Err(EncodingError::SizeMismatch(SizeMismatchType::OnDiskEntry))
     }
 
@@ -189,7 +193,7 @@ fn decode_entry_rebuild_data(data: &[u8]) -> Result<BaseEntryRebuildData, Encodi
             .map_err(|_| EncodingError::SliceCohersionError)?;
     let value_size = u64::from_be_bytes(val_size_bytes);
 
-    let expected_size = (25 + expiry_offset + key_size as u64)
+    let expected_size = (KV_ENTRY_HEADER_BASE_SIZE as u64 + expiry_offset + key_size as u64)
             .checked_add(value_size)
             .ok_or(EncodingError::SizeMismatch(SizeMismatchType::OnDiskEntry))?;
 
@@ -321,6 +325,109 @@ fn decode_entry_rebuild_data_from_short_entry(data: &[u8]) -> Result<(OffsetEntr
 }
 
 
+pub fn decode_bag_store_file_int_entries(data: &[u8]) -> Result<BagStoreFileDataIntermediateEntries, EncodingError> {
+    if data.len() < STORE_FILE_HEADER_SIZE {
+        return Err(EncodingError::SizeMismatch(SizeMismatchType::StoreFile))
+    }
+
+    let header_crc = &data[0..4];
+    let real_crc = util::calculate_crc(&data[4..]);
+
+    if header_crc != real_crc.to_be_bytes() {
+        return Err(EncodingError::CorruptStore)
+    }
+
+    let flags = data[4];
+
+    let mut entries = Vec::new();
+    let mut head = STORE_FILE_HEADER_SIZE;
+    while head < data.len() {
+        let (entry, size) = decode_entry_to_intermediate(&data[head..])?;
+        head += size;
+        entries.push(entry);
+    }
+
+    Ok(BagStoreFileDataIntermediateEntries {
+        flags,
+        int_entries: entries,
+    })
+}
+
+fn decode_entry_to_intermediate(data: &[u8]) -> Result<(ODIntermediateEntry, usize), EncodingError> {
+    if data.len() < KV_ENTRY_HEADER_BASE_SIZE {
+        return Err(EncodingError::SizeMismatch(SizeMismatchType::OnDiskEntry))
+    }
+
+    let header_crc = &data[0..4];
+
+        // Currently unused.
+    let timestamp_bytes: [u8; 8] = data[4..12].try_into()
+            .map_err(|_| EncodingError::SliceCohersionError)?;
+    let timestamp = u64::from_be_bytes(timestamp_bytes);
+
+    let flags = data[12];
+    let mut is_deleted = (flags & 0b0000_0001) != 0;
+    let has_expiry = (flags & 0b0000_0010) != 0;
+
+    let expiry_offset = if has_expiry { 16 } else { 0 };
+
+    let key_size_bytes: [u8; 4] = data[13..17].try_into()
+            .map_err(|_| EncodingError::SliceCohersionError)?;
+    let key_size = u32::from_be_bytes(key_size_bytes);
+
+    let val_size_bytes: [u8; 8] = data[17..25].try_into()
+            .map_err(|_| EncodingError::SliceCohersionError)?;
+    let value_size = u64::from_be_bytes(val_size_bytes);
+
+    let expected_size = (25 + expiry_offset + key_size as u64)
+            .checked_add(value_size)
+            .ok_or(EncodingError::SizeMismatch(SizeMismatchType::OnDiskEntry))?;
+
+    let expected_size_usize = usize::try_from(expected_size)
+        .map_err(|_| EncodingError::SizeMismatch(SizeMismatchType::OnDiskEntry))?;
+
+    if data.len() < expected_size_usize {
+        return Err(EncodingError::SizeMismatch(SizeMismatchType::OnDiskEntry))
+    }
+
+    let real_crc = util::calculate_crc(&data[4..expected_size_usize]);
+    if header_crc != real_crc.to_be_bytes() {
+        return Err(EncodingError::CorruptEntry)
+    }
+
+    let mut expiry = None;
+    if has_expiry {
+        let expiry_bytes: [u8; 16] = data[25..41].try_into()
+                .map_err(|_| EncodingError::SliceCohersionError)?;
+        let expiry_u128 = u128::from_be_bytes(expiry_bytes);
+        if expiry_u128 <= util::current_timestamp() {
+            is_deleted = true
+        }
+        else {
+            expiry = Some(expiry_u128)
+        }
+    }
+    
+    let key_offset = 25 + expiry_offset as usize;
+    let key_bytes = &data[key_offset..key_offset + key_size as usize];
+    let key = String::from_utf8(key_bytes.to_vec())
+            .map_err(EncodingError::StringDecodeError)?;
+
+    let value_offset = 25 + expiry_offset as usize + key_size as usize;
+    let value_bytes = &data[value_offset..value_offset + value_size as usize];
+
+    let entry = ODIntermediateEntry {
+        key,
+        value: value_bytes.to_vec(),
+        expiry,
+        is_tombstone: is_deleted,
+        timestamp
+    };
+
+    Ok((entry, expected_size_usize))
+}
+
+
 pub fn get_expiry_entry_data(data: &[u8]) -> Result<u128, EncodingError> {
     if data.len() < KV_ENTRY_HEADER_BASE_SIZE + 16 {
         return Err(EncodingError::SizeMismatch(SizeMismatchType::OnDiskEntry))
@@ -370,7 +477,7 @@ pub fn encode_od_entry(entry: &ODIntermediateEntry) -> Result<Vec<u8>, EncodingE
     let has_expiry = entry.expiry.is_some();
     let flags = (entry.is_tombstone as u8)
             | ((has_expiry as u8) << 1);
-    let timestamp = util::current_timestamp();
+    let timestamp = entry.timestamp;
     let mut entry_size = 25 + key_size as u64 + val_size;
     if has_expiry {
         entry_size += 16;
@@ -427,6 +534,76 @@ fn encode_bag_root(bag: &Bag) -> Result<Vec<u8>, EncodingError> {
     data.extend_from_slice(&path_len.to_be_bytes());
     data.extend_from_slice(key.as_bytes());
     data.extend_from_slice(path.as_bytes());
+
+    Ok(data)
+}
+
+pub fn encode_bag_store_file_header(bag: &BagStoreFileData) -> Result<Vec<u8>, EncodingError> {
+    let mut data = Vec::new();
+    let flags = (bag.is_deleted as u8)
+            | ((bag.is_sealed as u8) << 1)
+            | ((bag.is_archived as u8) << 2);
+
+    data.push(flags);
+    Ok(data)
+}
+
+pub fn encode_bag_store_file_full(header: &BagStoreFileData, entries: &[ODIntermediateEntry])
+            -> Result<(Vec<u8>, Vec<OffsetEntryRebuildData>), EncodingError> {
+    let encoded_header = encode_bag_store_file_header(header)?;
+    let mut data = Vec::new();
+    let mut offsets = Vec::new();
+    let mut head = STORE_FILE_HEADER_SIZE;
+    data.extend_from_slice(&encoded_header);
+    for entry in entries {
+        let encoded_entry = encode_od_entry(entry)?;
+        data.extend_from_slice(&encoded_entry);
+        let offset_data = OffsetEntryRebuildData {
+            key: entry.key.clone(),
+            size: encoded_entry.len() as u64,
+            offset: head as u64,
+            deleted: entry.is_tombstone,
+        };
+        offsets.push(offset_data);
+        head += encoded_entry.len();
+    }
+
+    Ok((data, offsets))
+}
+
+pub fn encode_seal_helper_file(seal_helper_data: &SealHelperFile) -> Result<Vec<u8>, EncodingError> {
+    let mut data = Vec::new();
+    data.extend_from_slice(&[0; 4]);      // Reserve for CRC.
+
+    let next_file = seal_helper_data.next_file.to_str()
+            .ok_or(EncodingError::CorruptPath)?
+            .as_bytes();
+    let nf_size = next_file.len();
+
+    data.extend_from_slice(&nf_size.to_be_bytes());
+    data.extend_from_slice(next_file);
+
+    for entry in &seal_helper_data.entries {
+        let encoded_short_entry = encode_short_entry(entry)?;
+        data.extend_from_slice(&encoded_short_entry);
+    }
+
+    let crc = util::calculate_crc(&data[4..]);
+    data[..4].copy_from_slice(&crc.to_be_bytes());
+
+    Ok(data)
+}
+
+fn encode_short_entry(entry: &OffsetEntryRebuildData) -> Result<Vec<u8>, EncodingError> {
+    let key_bytes = entry.key.as_bytes();
+    let key_size = key_bytes.len();
+
+    let mut data = Vec::with_capacity(SHORT_ENTRY_HEADER_SIZE + key_size);
+
+    data.extend_from_slice(&entry.offset.to_be_bytes());
+    data.extend_from_slice(&entry.size.to_be_bytes());
+    data.extend_from_slice(&key_size.to_be_bytes());
+    data.extend_from_slice(key_bytes);
 
     Ok(data)
 }
