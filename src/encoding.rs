@@ -17,7 +17,7 @@ use crate::model::OffsetEntryRebuildData;
 use crate::model::BagStoreFileDataIntermediateEntries;
 
 
-pub const STORE_FILE_HEADER_SIZE: usize = 1;
+pub const STORE_FILE_HEADER_SIZE: usize = 3;
 pub const SEAL_HELPER_FILE_HEADER_SIZE: usize = 6;
 pub const KV_ENTRY_HEADER_BASE_SIZE: usize = 25;
 pub const SHORT_ENTRY_HEADER_SIZE: usize = 20;
@@ -94,12 +94,16 @@ pub fn decode_bag_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingEr
     let is_sealed  = (flags & 0b0000_0010) != 0;
     let is_locked  = (flags & 0b0000_0100) != 0;
 
+    let file_id_data = [data[1], data[2]];
+    let file_id = u16::from_be_bytes(file_id_data);
+
     if is_sealed {
         return Ok(BagStoreFileData {
             headers: BagStoreFileHeaders {
                 is_sealed,
                 is_locked,
                 is_deleted,
+                file_id
             },
             rebuild_data: Vec::new(),
             next_file: None
@@ -120,6 +124,7 @@ pub fn decode_bag_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingEr
             is_sealed,
             is_locked,
             is_deleted,
+            file_id
         },
         rebuild_data: rebuild_entries,
         next_file: None,
@@ -132,10 +137,13 @@ pub fn decode_bag_store_file_header(data: &[u8]) -> Result<BagStoreFileHeaders, 
     }
 
     let flags = data[0];
-    Ok(BagStoreFileHeaders::from_flags(flags))
+    let file_id_data = [data[1], data[2]];
+    let file_id = u16::from_be_bytes(file_id_data);
+
+    Ok(BagStoreFileHeaders::from_flags_and_id(flags, file_id))
 }
 
-pub fn decode_seal_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingError> {
+pub fn decode_seal_store_file(data: &[u8], base_headers: &BagStoreFileHeaders) -> Result<BagStoreFileData, EncodingError> {
     let header_size = SEAL_HELPER_FILE_HEADER_SIZE;
     if data.len() < header_size {
         return Err(EncodingError::SizeMismatch(SizeMismatchType::SealHelperFile))
@@ -168,13 +176,8 @@ pub fn decode_seal_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingE
         rebuild_entries.push(rebuild_data);
     }
 
-        // TODO what to do for the actual flags??? they are in the parent file
     Ok(BagStoreFileData {
-        headers: BagStoreFileHeaders {
-            is_sealed: true,
-            is_locked: true,
-            is_deleted: false,
-        },
+        headers: base_headers.clone(),
         rebuild_data: rebuild_entries,
         next_file: Some(next_file),
     })
@@ -186,11 +189,6 @@ fn decode_entry_rebuild_data(data: &[u8]) -> Result<BaseEntryRebuildData, Encodi
     }
 
     let header_crc = &data[0..4];
-    // let real_crc = calculate_crc(&data[4..]);
-
-    // if header_crc != real_crc.to_be_bytes() {
-    //     return Err(EncodingError::CorruptEntry)
-    // }
 
         // Currently unused.
     let timestamp_bytes = &data[4..12];
@@ -346,14 +344,10 @@ pub fn decode_bag_store_file_int_entries(data: &[u8]) -> Result<BagStoreFileData
         return Err(EncodingError::SizeMismatch(SizeMismatchType::StoreFile))
     }
 
-    let header_crc = &data[0..4];
-    let real_crc = util::calculate_crc(&data[4..]);
+    let flags = data[0];
 
-    if header_crc != real_crc.to_be_bytes() {
-        return Err(EncodingError::CorruptStore)
-    }
-
-    let flags = data[4];
+    let file_id_data = [data[1], data[2]];
+    let file_id = u16::from_be_bytes(file_id_data);
 
     let mut entries = Vec::new();
     let mut head = STORE_FILE_HEADER_SIZE;
@@ -364,7 +358,7 @@ pub fn decode_bag_store_file_int_entries(data: &[u8]) -> Result<BagStoreFileData
     }
 
     Ok(BagStoreFileDataIntermediateEntries {
-        flags,
+        headers: BagStoreFileHeaders::from_flags_and_id(flags, file_id),
         int_entries: entries,
     })
 }
@@ -416,6 +410,7 @@ fn decode_entry_to_intermediate(data: &[u8]) -> Result<(ODIntermediateEntry, usi
         let expiry_bytes: [u8; 16] = data[25..41].try_into()
                 .map_err(|_| EncodingError::SliceCohersionError)?;
         let expiry_u128 = u128::from_be_bytes(expiry_bytes);
+            // TODO decide if this is what we want, or if we want to keep it as expiring
         if expiry_u128 <= util::current_timestamp() {
             is_deleted = true
         }
@@ -469,22 +464,6 @@ pub fn get_expiry_entry_data(data: &[u8]) -> Result<u128, EncodingError> {
     }
 
     Ok(expiry_u128)
-}
-
-pub fn encode_bag_entry(bag: &Bag) -> Result<Vec<u8>, EncodingError> {
-    let bag_root_path = bag.root_path.to_str()
-            .ok_or(EncodingError::CorruptPath)?;
-    let key_size = bag.key.len() as u16;
-    let path_size = bag_root_path.len() as u16;
-    let entry_size = 4 + key_size + path_size;
-    let mut res = Vec::with_capacity(entry_size as usize);
-
-    res.extend_from_slice(&key_size.to_be_bytes());
-    res.extend_from_slice(&path_size.to_be_bytes());
-    res.extend_from_slice(bag.key.as_bytes());
-    res.extend_from_slice(bag_root_path.as_bytes());
-
-    Ok(res)
 }
 
 pub fn encode_od_entry(entry: &ODIntermediateEntry) -> Result<Vec<u8>, EncodingError> {
@@ -561,6 +540,7 @@ pub fn encode_bag_store_file_header(headers: &BagStoreFileHeaders) -> Result<Vec
             | ((headers.is_locked as u8) << 2);
 
     data.push(flags);
+    data.extend_from_slice(&headers.file_id.to_be_bytes());
     Ok(data)
 }
 
@@ -594,7 +574,8 @@ pub fn encode_seal_helper_file(seal_helper_data: &SealHelperFile) -> Result<Vec<
     let next_file = seal_helper_data.next_file.to_str()
             .ok_or(EncodingError::CorruptPath)?
             .as_bytes();
-    let nf_size = next_file.len();
+    let nf_size: u16 = next_file.len().try_into()
+            .map_err(|_| EncodingError::IntoU16Failed)?;
 
     data.extend_from_slice(&nf_size.to_be_bytes());
     data.extend_from_slice(next_file);
@@ -612,9 +593,10 @@ pub fn encode_seal_helper_file(seal_helper_data: &SealHelperFile) -> Result<Vec<
 
 fn encode_short_entry(entry: &OffsetEntryRebuildData) -> Result<Vec<u8>, EncodingError> {
     let key_bytes = entry.key.as_bytes();
-    let key_size = key_bytes.len();
+    let key_size: u32 = key_bytes.len().try_into()
+            .map_err(|_| EncodingError::IntoU32Failed)?;
 
-    let mut data = Vec::with_capacity(SHORT_ENTRY_HEADER_SIZE + key_size);
+    let mut data = Vec::with_capacity(SHORT_ENTRY_HEADER_SIZE + key_size as usize);
 
     data.extend_from_slice(&entry.offset.to_be_bytes());
     data.extend_from_slice(&entry.size.to_be_bytes());
@@ -653,6 +635,8 @@ pub enum EncodingError {
     CorruptPath,
     #[error("Failed to coherce value to u16")]
     IntoU16Failed,
+    #[error("Failed to coherce value to u32")]
+    IntoU32Failed,
 
     #[error("Failed to recreate UTF8 String")]
     StringDecodeError(#[from] FromUtf8Error)

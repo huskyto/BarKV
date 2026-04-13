@@ -202,6 +202,7 @@ Optional header size: 16 bytes;
 
 - ~~crc: [u8; 4]~~
 - flags: u8
+- file_id: u16
 - entries: [OnDiskEntry]
 
 #### Flags

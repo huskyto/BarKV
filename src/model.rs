@@ -25,7 +25,7 @@ pub struct Bag {
     pub root_path: PathBuf,
     pub active_path: PathBuf,
     pub file_handle: File,
-    pub current_file_id: usize
+    pub current_file_id: u16
 }
 
 pub struct SealHelperFile {
@@ -72,25 +72,28 @@ impl OffsetEntryRebuildData {
     }
 }
 
+#[derive(Clone)]
 pub struct BagStoreFileHeaders {
     pub is_sealed: bool,
     pub is_locked: bool,
     pub is_deleted: bool,
+    pub file_id: u16
 }
 impl BagStoreFileHeaders {
-    pub fn for_init() -> Self {
+    pub fn for_init(file_id: u16) -> Self {
         Self {
             is_sealed: false,
             is_locked: false,
             is_deleted: false,
+            file_id
         }
     }
-    pub fn from_flags(flags: u8) -> Self {
+    pub fn from_flags_and_id(flags: u8, file_id: u16) -> Self {
         let is_deleted = (flags & 0b0000_0001) != 0;
         let is_sealed  = (flags & 0b0000_0010) != 0;
         let is_locked  = (flags & 0b0000_0100) != 0;
 
-        Self { is_sealed, is_locked,is_deleted, }
+        Self { is_sealed, is_locked,is_deleted, file_id }
     }
 }
 
@@ -100,12 +103,13 @@ pub struct BagStoreFileData {
     pub next_file: Option<PathBuf>
 }
 impl BagStoreFileData {
-    pub fn for_init() -> Self {
+    pub fn for_init(file_id: u16) -> Self {
         Self {
             headers: BagStoreFileHeaders {
                 is_sealed: false,
                 is_locked: false,
                 is_deleted: false,
+                file_id
             },
             rebuild_data: Vec::new(),
             next_file: None,
@@ -114,7 +118,7 @@ impl BagStoreFileData {
 }
 
 pub struct BagStoreFileDataIntermediateEntries {
-    pub flags: u8,
+    pub headers: BagStoreFileHeaders,
     pub int_entries: Vec<ODIntermediateEntry>,
 }
 

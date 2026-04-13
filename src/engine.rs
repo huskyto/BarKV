@@ -123,7 +123,7 @@ impl BarKVEngine {
         let mut file_handle = io::create_file_to_append(&bag_root_path)?;
 
                 // Init bag store file with header
-        let header_data = BagStoreFileHeaders::for_init();
+        let header_data = BagStoreFileHeaders::for_init(0);
         let header = encoding::encode_bag_store_file_header(&header_data)?;
         io::write_all(&mut file_handle, &header)?;
 
@@ -461,7 +461,7 @@ impl BarKVEngine {
             if is_sealed {
                 let seal_data = io::read_chunk(&mut file_handle,
                         0, encoding::SEAL_HELPER_FILE_HEADER_SIZE as u64)?;
-                let decoded_seal = encoding::decode_seal_store_file(&seal_data)?;
+                let decoded_seal = encoding::decode_seal_store_file(&seal_data, &decoded.headers)?;
                 next_file = decoded_seal.next_file;
             }
             else {
@@ -489,12 +489,13 @@ impl BarKVEngine {
             is_sealed: false,
             is_locked: true,
             is_deleted: false,
+            file_id: bag.current_file_id
         };
 
         let offset_data = Self::compact_partial(bag, Some(updated_headers))?;
 
                 // Create sealed helper file
-        let next_file_path = self.build_bag_path(&bag.key, bag.current_file_id + 1);
+        let next_file_path = self.build_bag_path(&bag.key, bag.current_file_id as usize + 1);
         let seal_helper_data = SealHelperFile {
             next_file: next_file_path.clone(),
             entries: offset_data,
@@ -510,7 +511,7 @@ impl BarKVEngine {
         bag.current_file_id += 1;
         bag.active_path = next_file_path;
 
-        let header_data = BagStoreFileHeaders::for_init();
+        let header_data = BagStoreFileHeaders::for_init(bag.current_file_id);
         let header = encoding::encode_bag_store_file_header(&header_data)?;
         io::write_all(&mut next_file_handle, &header)?;
 
@@ -547,7 +548,7 @@ impl BarKVEngine {
         let entries: Vec<ODIntermediateEntry> = entries_map.into_values().collect();
         let new_headers = match updated_headers {
             Some(headers) => headers,
-            None => BagStoreFileHeaders::from_flags(decode_data.flags),
+            None => decode_data.headers,
         };
         let (bag_store_data, offset_data) = encoding::encode_bag_store_file_full(&new_headers, &entries)?;
         io::overwrite(path, &bag_store_data)?;
@@ -584,13 +585,14 @@ impl BarKVEngine {
 
             let header_data = io::read_chunk(&mut file_handle, 0, encoding::STORE_FILE_HEADER_SIZE as u64)?;
             let store_headers = encoding::decode_bag_store_file_header(&header_data)?;
+            current_id = store_headers.file_id;
 
             let decode_data = if store_headers.is_locked || store_headers.is_sealed {
                 let seal_file_path = Self::get_sealed_file_path(next_path);
                 let mut seal_file_handle = io::open_file_for_read(&seal_file_path)?;
                 let seal_file_data = io::read_all_file(&mut seal_file_handle)?;
                 io::close_file(&mut seal_file_handle)?;
-                encoding::decode_seal_store_file(&seal_file_data)?
+                encoding::decode_seal_store_file(&seal_file_data, &store_headers)?
             }
             else {
                 let data = io::read_all_file(&mut file_handle)?;
@@ -610,9 +612,6 @@ impl BarKVEngine {
 
             io::close_file(&mut file_handle)?;
             next_file = decode_data.next_file;
-            if next_file.is_some() {
-                current_id += 1;
-            }
         }
 
         let active_file_handle = io::open_file_to_append(&active_path)?;
