@@ -22,13 +22,15 @@ use crate::model::EntryKey;
 use crate::model::StoreArchive;
 use crate::model::SealHelperFile;
 use crate::model::ODIntermediateEntry;
+use crate::validation;
+use crate::validation::ValidationFailure;
 
 
-const STORE_FILENAME: &str = "barkv.store";
+pub(crate) const STORE_FILENAME: &str = "barkv.store";
 
 pub struct BarKVEngine {
-    store: StoreArchive,
-    root_path: PathBuf         // This should be a folder
+    pub(super) store: StoreArchive,
+    pub(super) root_path: PathBuf         // This should be a folder
 }
 
 impl BarKVEngine {
@@ -236,7 +238,15 @@ impl BarKVEngine {
     }
 
     pub fn open_or_create(path: &str) -> Result<BarKVEngine, EngineError> {
-        todo!()     // TODO
+        match Self::open(path) {
+            Ok(engine) => Ok(engine),
+            Err(e) => {
+                match e {
+                    EngineError::RootFileNotFound => Self::create(path),
+                    e => Err(e)
+                }
+            },
+        }
     }
 
     pub fn close(&mut self) {
@@ -429,8 +439,8 @@ impl BarKVEngine {
         todo!()     // TODO Stats model
     }
 
-    pub fn validate(&self) {
-        todo!()     // TODO check crcs
+    pub fn validate(&self) -> Vec<ValidationFailure> {
+        validation::validate(self)
     }
 
 
@@ -444,7 +454,7 @@ impl BarKVEngine {
         self.root_path.join(STORE_FILENAME)
     }
 
-    fn get_bag_file_chain(bag: &Bag) -> Result<Vec<PathBuf>, EngineError> {
+    pub(super) fn get_bag_file_chain(bag: &Bag) -> Result<Vec<PathBuf>, EngineError> {
         let mut res = Vec::new();
         res.push(bag.root_path.clone());
         let mut root_file = io::open_file_for_read(&bag.root_path)?;
@@ -480,7 +490,7 @@ impl BarKVEngine {
         base_file_path.with_extension("seal")
     }
 
-    fn is_file_seal(path: &Path) -> bool {
+    pub(super) fn is_file_seal(path: &Path) -> bool {
         path.extension().is_some_and(|ext| ext == "seal")
     }
 

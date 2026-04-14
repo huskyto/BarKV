@@ -17,13 +17,14 @@ use crate::model::OffsetEntryRebuildData;
 use crate::model::BagStoreFileDataIntermediateEntries;
 
 
+pub const ROOT_STORE_FILE_HEADER_SIZE: usize = 12;
 pub const STORE_FILE_HEADER_SIZE: usize = 3;
 pub const SEAL_HELPER_FILE_HEADER_SIZE: usize = 6;
 pub const KV_ENTRY_HEADER_BASE_SIZE: usize = 25;
 pub const SHORT_ENTRY_HEADER_SIZE: usize = 20;
 
-pub fn decode_store_roots(data: &[u8]) -> Result<Vec<BagRootEntry>, EncodingError> {
-    if data.len() < 12 {
+pub fn validate_root_store(data: &[u8]) -> Result<(), EncodingError> {
+    if data.len() < ROOT_STORE_FILE_HEADER_SIZE {
         return Err(EncodingError::SizeMismatch(SizeMismatchType::StoreHeader))
     }
 
@@ -39,8 +40,12 @@ pub fn decode_store_roots(data: &[u8]) -> Result<Vec<BagRootEntry>, EncodingErro
     let real_crc = util::calculate_crc(&data[12..]);
 
     if header_crc != real_crc.to_be_bytes() {
-        return Err(EncodingError::CorruptStore)
-    }
+        Err(EncodingError::CorruptStore)
+    } else { Ok(()) }
+}
+
+pub fn decode_store_roots(data: &[u8]) -> Result<Vec<BagRootEntry>, EncodingError> {
+    validate_root_store(data)?;
 
     let mut roots = Vec::new();
     let mut head = 12;
