@@ -1,16 +1,14 @@
 
 use std::fs;
 use std::io::Error;
-use std::path::Path;
 use std::path::PathBuf;
 use std::collections::HashMap;
 use thiserror::Error;
 
 use crate::io;
-use crate::model::BagRootEntry;
-use crate::model::BagStoreFileHeaders;
-use crate::model::OffsetEntryRebuildData;
 use crate::util;
+use crate::model::BagStoreFileHeaders;
+use crate::upkeep;
 use crate::encoding;
 use crate::encoding::EncodingError;
 use crate::encoding::SizeMismatchType;
@@ -27,6 +25,7 @@ use crate::validation::ValidationFailure;
 
 
 pub(crate) const STORE_FILENAME: &str = "barkv.store";
+const MIN_LOCK_SIZE: usize = 10_000;        // TODO move to config
 
 pub struct BarKVEngine {
     pub(super) store: StoreArchive,
@@ -71,7 +70,16 @@ impl BarKVEngine {
 
         bag.entries.insert(key.clone(), im_entry);
 
+        let new_size = offset as usize + encoded_entry.len();
+        self.lock_if_needed(bag_key, new_size)?;
+
         Ok(())
+    }
+
+    fn lock_if_needed(&mut self, bag_key: &BagKey, new_size: usize) -> Result<(), EngineError> {
+        if new_size >= MIN_LOCK_SIZE {
+            self.lock_active(bag_key)
+        } else { Ok(()) }
     }
 
     pub fn delete(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<(), EngineError> {
@@ -84,9 +92,12 @@ impl BarKVEngine {
 
         let od_in_entry = ODIntermediateEntry::make_tombstone(key.into());
         let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
-        io::append(&mut bag.file_handle, &encoded_entry)?;
+        let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
 
         bag.entries.remove(key);
+
+        let new_size = offset as usize + encoded_entry.len();
+        self.lock_if_needed(bag_key, new_size)?;
 
         Ok(())
     }
@@ -158,7 +169,7 @@ impl BarKVEngine {
         io::overwrite(&self.get_store_file_path(), &encoded_store)?;
 
                 // Remove bag files
-        let bag_files = Self::get_bag_file_chain(&bag)?;
+        let bag_files = upkeep::get_bag_file_chain(&bag)?;
         for file in bag_files {
             fs::remove_file(file)?;
         }
@@ -199,7 +210,7 @@ impl BarKVEngine {
         let mut bags = HashMap::new();
 
         for bag_root in bag_roots {
-            let rebuilt_bag = Self::rebuild_bag_history(&bag_root)?;
+            let rebuilt_bag = upkeep::rebuild_bag_history(&bag_root)?;
             bags.insert(bag_root.key.clone(), rebuilt_bag);
         }
 
@@ -260,7 +271,7 @@ impl BarKVEngine {
     pub fn compact_active(&mut self) -> Vec<(BagKey, Result<(), EngineError>)> {
         self.store.bags.iter_mut()
                 .map(|(key, bag)| {
-                    (key.clone(), Self::compact_partial(bag, None).map(|_| ()))
+                    (key.clone(), upkeep::compact_partial(bag, None).map(|_| ()))
                 })
                 .collect()
     }
@@ -317,6 +328,8 @@ impl BarKVEngine {
         let bag = self.store.bags.get_mut(bag_key)
                 .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
 
+        let mut new_size = 0;
+
         for pair in pairs {
             let key = pair.key.clone();
 
@@ -332,7 +345,11 @@ impl BarKVEngine {
             };
 
             bag.entries.insert(key, im_entry);
+
+            new_size = offset as usize + encoded_entry.len();
         }
+
+        self.lock_if_needed(bag_key, new_size)?;
 
         Ok(())
     }
@@ -341,6 +358,8 @@ impl BarKVEngine {
         let bag = self.store.bags.get_mut(bag_key)
                 .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
 
+        let mut new_size = 0;
+
         for &key in keys {
             if !bag.entries.contains_key(key) {
                 continue;
@@ -348,10 +367,14 @@ impl BarKVEngine {
     
             let od_in_entry = ODIntermediateEntry::make_tombstone(key.into());
             let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
-            io::append(&mut bag.file_handle, &encoded_entry)?;
+            let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
     
             bag.entries.remove(key);
+
+            new_size = offset as usize + encoded_entry.len();
         }
+
+        self.lock_if_needed(bag_key, new_size)?;
 
         Ok(())
     }
@@ -376,6 +399,9 @@ impl BarKVEngine {
         };
 
         bag.entries.insert(key.clone(), im_entry);
+
+        let new_size = offset as usize + encoded_entry.len();
+        self.lock_if_needed(bag_key, new_size);
 
         Ok(())
     }
@@ -429,6 +455,9 @@ impl BarKVEngine {
 
         bag.entries.insert(key.clone(), im_entry);
 
+        let new_size = offset as usize + encoded_entry.len();
+        self.lock_if_needed(bag_key, new_size);
+
         Ok(())
     }
 
@@ -454,47 +483,10 @@ impl BarKVEngine {
         self.root_path.join(STORE_FILENAME)
     }
 
-    pub(super) fn get_bag_file_chain(bag: &Bag) -> Result<Vec<PathBuf>, EngineError> {
-        let mut res = Vec::new();
-        res.push(bag.root_path.clone());
-        let mut root_file = io::open_file_for_read(&bag.root_path)?;
-        let data = io::read_chunk(&mut root_file, 0, encoding::STORE_FILE_HEADER_SIZE as u64)?;
-        let decoded = encoding::decode_bag_store_file(&data)?;
-        let mut next_file = if decoded.headers.is_sealed {
-            Some(Self::get_sealed_file_path(&bag.root_path))
-        } else { None };
+    pub(super) fn lock_active(&mut self, bag_key: &BagKey) -> Result<(), EngineError> {
+        let bag = self.store.bags.get_mut(bag_key)
+                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
 
-        while let Some(next) = &next_file {
-            res.push(next.clone());
-            let is_sealed = Self::is_file_seal(next);
-            let mut file_handle = io::open_file_for_read(next)?;
-            if is_sealed {
-                let seal_data = io::read_chunk(&mut file_handle,
-                        0, encoding::SEAL_HELPER_FILE_HEADER_SIZE as u64)?;
-                let decoded_seal = encoding::decode_seal_store_file(&seal_data, &decoded.headers)?;
-                next_file = decoded_seal.next_file;
-            }
-            else {
-                let data = io::read_chunk(&mut file_handle, 0, encoding::STORE_FILE_HEADER_SIZE as u64)?;
-                let decoded = encoding::decode_bag_store_file(&data)?;
-                next_file = if decoded.headers.is_sealed {
-                    Some(Self::get_sealed_file_path(next))
-                } else { None };
-            }
-        }
-
-        Ok(res)
-    }
-
-    fn get_sealed_file_path(base_file_path: &Path) -> PathBuf {
-        base_file_path.with_extension("seal")
-    }
-
-    pub(super) fn is_file_seal(path: &Path) -> bool {
-        path.extension().is_some_and(|ext| ext == "seal")
-    }
-
-    fn lock_active(&self, bag: &mut Bag) -> Result<(), EngineError> {
         let updated_headers = BagStoreFileHeaders {
             is_sealed: false,
             is_locked: true,
@@ -502,16 +494,17 @@ impl BarKVEngine {
             file_id: bag.current_file_id
         };
 
-        let offset_data = Self::compact_partial(bag, Some(updated_headers))?;
+        let offset_data = upkeep::compact_partial(bag, Some(updated_headers))?;
 
                 // Create sealed helper file
-        let next_file_path = self.build_bag_path(&bag.key, bag.current_file_id as usize + 1);
+        let next_file_path = upkeep::build_bag_path(&self.root_path,
+                    bag_key, bag.current_file_id as usize + 1);
         let seal_helper_data = SealHelperFile {
             next_file: next_file_path.clone(),
             entries: offset_data,
         };
         let encoded_seal_file = encoding::encode_seal_helper_file(&seal_helper_data)?;
-        let seal_file_path = Self::get_sealed_file_path(&bag.active_path);
+        let seal_file_path = upkeep::get_sealed_file_path(&bag.active_path);
         let mut seal_file_handle = io::create_file_to_append(&seal_file_path)?;
         io::write_all(&mut seal_file_handle, &encoded_seal_file)?;
         io::close_file(&mut seal_file_handle)?;
@@ -528,113 +521,6 @@ impl BarKVEngine {
         bag.file_handle = next_file_handle;
 
         Ok(())
-    }
-
-    fn compact_partial(bag: &mut Bag, updated_headers: Option<BagStoreFileHeaders>) -> Result<Vec<OffsetEntryRebuildData>, EngineError> {
-        let path = &bag.active_path;
-
-        let mut file_handle = io::open_file_for_read(path)?;
-        let data = io::read_all_file(&mut file_handle)?;
-        io::close_file(&mut file_handle)?;
-        let decode_data = encoding::decode_bag_store_file_int_entries(&data)?;
-        let current_timestamp_millis = util::current_timestamp();
-        let mut entries_map = HashMap::new();
-
-        for entry in decode_data.int_entries {
-            if entry.is_tombstone {
-                    // Maintain tombstone regardless on partial compaction
-                entries_map.insert(entry.key.clone(), entry);
-            }
-            else if let Some(expiry) = entry.expiry && expiry <= current_timestamp_millis  {
-                entries_map.insert(entry.key.clone(), entry.to_tombstone());
-            }
-            else {
-                entries_map.insert(entry.key.clone(), entry);
-            }
-        }
-
-                // Write updated data.
-
-        let entries: Vec<ODIntermediateEntry> = entries_map.into_values().collect();
-        let new_headers = match updated_headers {
-            Some(headers) => headers,
-            None => decode_data.headers,
-        };
-        let (bag_store_data, offset_data) = encoding::encode_bag_store_file_full(&new_headers, &entries)?;
-        io::overwrite(path, &bag_store_data)?;
-
-                // Update IMEntries
-
-        bag.entries.retain(|_, ime| &ime.file != path);
-        
-        for offset_entry in &offset_data {
-            let updated_im_entry = offset_entry.to_im_entry(path);
-            bag.entries.insert(offset_entry.key.clone(), updated_im_entry);
-        }
-
-        Ok(offset_data)
-    }
-
-    fn build_bag_path(&self, bag_key: &BagKey, file_id: usize) -> PathBuf {
-        let bag_filename = format!("{bag_key}-{file_id}.bkv");
-        self.root_path.join(bag_filename)
-    }
-
-    fn rebuild_bag_history(bag_root: &BagRootEntry) -> Result<Bag, EngineError> {
-        let root_file_path = PathBuf::from(&bag_root.root_path);
-
-        let mut next_file = Some(root_file_path.clone());
-        let mut entries_map = HashMap::new();
-
-        let mut active_path = root_file_path.clone();
-        let mut current_id = 0;
-
-        while let Some(next_path) = &next_file {
-            active_path = next_path.clone();
-            let mut file_handle = io::open_file_for_read(next_path)?;
-
-            let header_data = io::read_chunk(&mut file_handle, 0, encoding::STORE_FILE_HEADER_SIZE as u64)?;
-            let store_headers = encoding::decode_bag_store_file_header(&header_data)?;
-            current_id = store_headers.file_id;
-
-            let decode_data = if store_headers.is_locked || store_headers.is_sealed {
-                let seal_file_path = Self::get_sealed_file_path(next_path);
-                let mut seal_file_handle = io::open_file_for_read(&seal_file_path)?;
-                let seal_file_data = io::read_all_file(&mut seal_file_handle)?;
-                io::close_file(&mut seal_file_handle)?;
-                encoding::decode_seal_store_file(&seal_file_data, &store_headers)?
-            }
-            else {
-                let data = io::read_all_file(&mut file_handle)?;
-                encoding::decode_bag_store_file(&data)?
-            };
-
-            for entry in decode_data.rebuild_data {
-                if entry.deleted {
-                        // Maintain tombstone regardless on partial compaction
-                    entries_map.remove(&entry.key);
-                }
-                else {
-                    let im_entry = entry.to_im_entry(next_path);
-                    entries_map.insert(entry.key.clone(), im_entry);
-                }
-            }
-
-            io::close_file(&mut file_handle)?;
-            next_file = decode_data.next_file;
-        }
-
-        let active_file_handle = io::open_file_to_append(&active_path)?;
-        let bag = Bag {
-            key: bag_root.key.clone(),
-            entries: entries_map,
-            root_path: root_file_path,
-            active_path,
-            file_handle: active_file_handle,
-            current_file_id: current_id,
-        };
-
-        Ok(bag)
     }
 
 }

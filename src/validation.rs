@@ -2,14 +2,14 @@
 use thiserror::Error;
 
 use crate::io;
+use crate::upkeep;
 use crate::encoding;
 use crate::encoding::EncodingError;
 use crate::engine::EngineError;
 use crate::engine::BarKVEngine;
-
 use crate::model::BagKey;
-use crate::model::BagStoreFileHeaders;
 use crate::model::EntryKey;
+use crate::model::BagStoreFileHeaders;
 
 use crate::engine::STORE_FILENAME;
 
@@ -40,7 +40,7 @@ pub fn validate(engine: &BarKVEngine) -> Vec<ValidationFailure> {
 
             // Bag validations.
     for (bag_key, bag) in &engine.store.bags {
-        let bag_file_chain = match BarKVEngine::get_bag_file_chain(bag) {
+        let bag_file_chain = match upkeep::get_bag_file_chain(bag) {
             Ok(c) => c,
             Err(e) => {
                 failures.push(ValidationFailure::bag(bag_key.clone(), ValidationError::Engine(e)));
@@ -66,7 +66,7 @@ pub fn validate(engine: &BarKVEngine) -> Vec<ValidationFailure> {
                     // TODO add granularity and depth.
                     // Right now it fails on the first encountered error.
                     // And lacks per-entry information.
-            if BarKVEngine::is_file_seal(&bag_file) {
+            if upkeep::is_file_seal(&bag_file) {
                 if let Err(e) = encoding::decode_seal_store_file(&bag_file_data, &dummy_headers) {
                     failures.push(ValidationFailure::bag(bag_key.clone(), ValidationError::Encoding(e)));
                 }
