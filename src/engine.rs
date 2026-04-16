@@ -263,7 +263,7 @@ impl BarKVEngine {
     pub fn close(&mut self) -> Result<(), EngineError> {
         for bag in self.store.bags.values_mut() {
             io::close_file(&mut bag.file_handle)?;
-    }
+        }
 
         Ok(())
     }
@@ -289,18 +289,31 @@ impl BarKVEngine {
     }
 
 
-            // ATOMIC // TODO extension.
+            // ATOMIC //
+            
+            // TODO Make these actually atomic once concurrency is added.
     
     pub fn get_or_set(&mut self, bag_key: &BagKey, key: &EntryKey, value: &[u8]) -> Result<Vec<u8>, EngineError> {
-        todo!()     // TODO
+        if self.exists(bag_key, key) {
+            self.get(bag_key, key)
+        } else {
+            self.set(bag_key, key, value)?;
+            Ok(value.to_vec())
+        }
     }
 
     pub fn update_if_different(&mut self, bag_key: &BagKey, key: &EntryKey, value: &[u8]) -> Result<(), EngineError> {
-        todo!()     // TODO Maybe?
+        let current = self.get(bag_key, key)?;
+        if current != value {
+            self.set(bag_key, key, value)?;
+        }
+        Ok(())
     }
 
     pub fn get_and_delete(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<Vec<u8>, EngineError> {
-        todo!()     // TODO
+        let value = self.get(bag_key, key)?;
+        self.delete(bag_key, key)?;
+        Ok(value)
     }
 
 
