@@ -130,9 +130,13 @@ pub(super) fn compact_partial(bag: &mut Bag, updated_headers: Option<BagStoreFil
     bag.entries.retain(|_, ime| &ime.file != path);
     
     for offset_entry in &offset_data {
+        if offset_entry.deleted { continue; }
+
         let updated_im_entry = offset_entry.to_im_entry(path);
         bag.entries.insert(offset_entry.key.clone(), updated_im_entry);
     }
+
+    bag.file_handle = io::open_file_to_append(path)?;
 
     Ok(offset_data)
 }
@@ -227,9 +231,7 @@ pub (super) fn full_compaction(bag: &mut Bag, store_root_path: &Path) -> Result<
             };
             let encoded_seal_file = encoding::encode_seal_helper_file(&seal_helper_data)?;
             let seal_file_path = get_sealed_file_path(&file_info.filepath);
-            let mut seal_file_handle = io::create_file_to_append(&seal_file_path)?;
-            io::write_all(&mut seal_file_handle, &encoded_seal_file)?;
-            io::close_file(&mut seal_file_handle)?;
+            io::overwrite(&seal_file_path, &encoded_seal_file)?;
         }
         else if file_info.is_locked {
             let new_headers = BagStoreFileHeaders::for_sealed(file_info.file_id);
@@ -253,9 +255,7 @@ pub (super) fn full_compaction(bag: &mut Bag, store_root_path: &Path) -> Result<
             };
             let encoded_seal_file = encoding::encode_seal_helper_file(&seal_helper_data)?;
             let seal_file_path = get_sealed_file_path(&file_info.filepath);
-            let mut seal_file_handle = io::create_file_to_append(&seal_file_path)?;
-            io::write_all(&mut seal_file_handle, &encoded_seal_file)?;
-            io::close_file(&mut seal_file_handle)?;
+            io::overwrite(&seal_file_path, &encoded_seal_file)?;
         }
         else {
             let new_headers = BagStoreFileHeaders::for_init(file_info.file_id);
@@ -296,8 +296,7 @@ pub(super) fn get_bag_file_chain(bag: &Bag) -> Result<Vec<PathBuf>, EngineError>
         let is_sealed = is_file_seal(next);
         let mut file_handle = io::open_file_for_read(next)?;
         if is_sealed {
-            let seal_data = io::read_chunk(&mut file_handle,
-                    0, encoding::SEAL_HELPER_FILE_HEADER_SIZE as u64)?;
+            let seal_data = io::read_all_file(&mut file_handle)?;
             let decoded_seal = encoding::decode_seal_store_file(&seal_data, &decoded.headers)?;
             next_file = decoded_seal.next_file;
         }

@@ -1,11 +1,8 @@
 
-pub mod model;
-pub mod engine;
+use bar_kv::engine::BarKVEngine;
+use bar_kv::engine::EngineError;
 
-mod io;
-mod util;
-mod upkeep;
-mod encoding;
-mod validation;
 
+fn main() -> Result<(), EngineError> {
+    Ok(())
 }

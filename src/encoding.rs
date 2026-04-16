@@ -196,7 +196,7 @@ fn decode_entry_rebuild_data(data: &[u8]) -> Result<BaseEntryRebuildData, Encodi
     let header_crc = &data[0..4];
 
         // Currently unused.
-    let timestamp_bytes = &data[4..12];
+    let _timestamp_bytes = &data[4..12];
 
     let flags = data[12];
     let is_deleted = (flags & 0b0000_0001) != 0;
