@@ -147,8 +147,9 @@ struct FileInfo {
 
 pub (super) fn full_compaction(bag: &mut Bag, store_root_path: &Path) -> Result<(), EngineError> {
     let file_chain = get_bag_file_chain(bag)?;
-    let mut full_entries_map: HashMap<EntryKey, (FileInfo, ODIntermediateEntry)> = HashMap::new();
+    let mut full_entries_map: HashMap<EntryKey, (u16, ODIntermediateEntry)> = HashMap::new();
     let current_timestamp_millis = util::current_timestamp();
+    let mut file_infos = HashMap::new();
 
     for file_path in file_chain {
                     // Process Entries //
@@ -163,6 +164,7 @@ pub (super) fn full_compaction(bag: &mut Bag, store_root_path: &Path) -> Result<
             is_locked: decode_data.headers.is_locked,
             is_sealed: decode_data.headers.is_sealed,
         };
+        file_infos.insert(decode_data.headers.file_id, file_info);
 
         for entry in decode_data.int_entries {
             if entry.is_tombstone {
@@ -175,26 +177,27 @@ pub (super) fn full_compaction(bag: &mut Bag, store_root_path: &Path) -> Result<
             }
             else {
                     // Overwrite is still enough.
-                full_entries_map.insert(entry.key.clone(), (file_info.clone(), entry));
+                full_entries_map.insert(entry.key.clone(), (decode_data.headers.file_id, entry));
             }
         }
     }
 
-    let mut map_by_file: HashMap<u16, (FileInfo, Vec<ODIntermediateEntry>)> = HashMap::new();
+    let mut map_by_file: HashMap<u16, Vec<ODIntermediateEntry>> = HashMap::new();
 
             // TODO possible target for optimization. Verify with perf data.
-    for (_, (file_info, entry)) in full_entries_map {
-        map_by_file.entry(file_info.file_id)
-            .or_insert_with(|| (file_info.clone(), Vec::new()))
-            .1.push(entry);
+    for (_, (file_id, entry)) in full_entries_map {
+        map_by_file.entry(file_id)
+            .or_default()
+            .push(entry);
     }
 
-    let mut sorted_by_file_id: Vec<(u16, (FileInfo, Vec<ODIntermediateEntry>))> = map_by_file.into_iter().collect();
-    sorted_by_file_id.sort_by_key(|(id, _)| *id);
+    let mut sorted_by_id: Vec<(u16, FileInfo)> = file_infos.into_iter().collect();
+    sorted_by_id.sort_by_key(|(id, _)| *id);
 
     let mut new_im_index: HashMap<String, IMEntry> = HashMap::new();
 
-    for (file_id, (file_info, file_entries)) in sorted_by_file_id {
+    for (file_id, file_info) in sorted_by_id {
+        let file_entries = map_by_file.remove(&file_id).unwrap_or_default();
         if file_info.is_sealed {
                         // Update sealed helper file
             let next_file_path = build_bag_path(store_root_path,

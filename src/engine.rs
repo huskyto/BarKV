@@ -495,10 +495,6 @@ impl BarKVEngine {
 
 
             // INTERNAL //
-    
-    fn seal(&mut self, bag_key: &BagKey) -> Result<String, EngineError> {
-        todo!()
-    }
 
     fn get_store_file_path(&self) -> PathBuf {
         self.root_path.join(STORE_FILENAME)
@@ -567,8 +563,7 @@ pub enum EngineError {
     RootFileNotFound,
     #[error("Entry properties are inconsistent")]
     EntryConsistencyError,
-    // #[error("Wrapped ParseError: {0}")]
-    // ParseError(#[from] ParseError)
+
     #[error("Wrapped encoding error: {0}")]
     WrappedEncodingError(#[from] EncodingError),
     #[error("Wrapped io error: {0}")]

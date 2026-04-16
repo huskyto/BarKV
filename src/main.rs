@@ -4,11 +4,8 @@ pub mod engine;
 
 mod io;
 mod util;
+mod upkeep;
 mod encoding;
 mod validation;
-mod upkeep;
 
-
-fn main() {
-    println!("Hello, world!");
 }
