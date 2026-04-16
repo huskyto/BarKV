@@ -260,13 +260,17 @@ impl BarKVEngine {
         }
     }
 
-    pub fn close(&mut self) {
-        todo!()     // TODO Result and async?
+    pub fn close(&mut self) -> Result<(), EngineError> {
+        for bag in self.store.bags.values_mut() {
+            io::close_file(&mut bag.file_handle)?;
     }
 
-    pub fn sync(&mut self) {
-        todo!()     // TODO need ?
+        Ok(())
     }
+
+    // pub fn sync(&mut self) {
+    //     todo!()     // what what this supposed to do? probably no need... I think
+    // }
     
     pub fn compact_active(&mut self) -> Vec<(BagKey, Result<(), EngineError>)> {
         self.store.bags.iter_mut()
@@ -276,8 +280,12 @@ impl BarKVEngine {
                 .collect()
     }
 
-    pub fn full_compaction(&mut self) {
-        todo!()     // TODO
+    pub fn full_compaction(&mut self) -> Vec<(BagKey, Result<(), EngineError>)>  {
+        self.store.bags.iter_mut()
+                .map(|(key, bag)| {
+                    (key.clone(), upkeep::full_compaction(bag, &self.root_path).map(|_| ()))
+                })
+                .collect()
     }
 
 
@@ -401,7 +409,7 @@ impl BarKVEngine {
         bag.entries.insert(key.clone(), im_entry);
 
         let new_size = offset as usize + encoded_entry.len();
-        self.lock_if_needed(bag_key, new_size);
+        self.lock_if_needed(bag_key, new_size)?;
 
         Ok(())
     }
@@ -456,7 +464,7 @@ impl BarKVEngine {
         bag.entries.insert(key.clone(), im_entry);
 
         let new_size = offset as usize + encoded_entry.len();
-        self.lock_if_needed(bag_key, new_size);
+        self.lock_if_needed(bag_key, new_size)?;
 
         Ok(())
     }
@@ -544,6 +552,8 @@ pub enum EngineError {
     RootPathNotEmpty,
     #[error("Root file not found in path")]
     RootFileNotFound,
+    #[error("Entry properties are inconsistent")]
+    EntryConsistencyError,
     // #[error("Wrapped ParseError: {0}")]
     // ParseError(#[from] ParseError)
     #[error("Wrapped encoding error: {0}")]

@@ -85,7 +85,7 @@ It includes:
 
 If a full compaction is run, files that were previously **locked** will be finalized and immutable, and the **sealed** flag will be turned on.
 
-The Seal Helper File corresponding to his file may be modified during full compaction, but will afterwards also become immutable.
+The Seal Helper File corresponding to his file may be modified during full compactions, but the actual store will remain unchanged.
 
 ### Seal Helper File
 
@@ -255,7 +255,6 @@ Optional header size: 16 bytes;
 - create(path)
 - open_or_create(path)
 - close()
-- sync()
 - compact_active()
 - full_compaction()
 

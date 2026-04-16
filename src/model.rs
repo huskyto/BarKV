@@ -33,6 +33,7 @@ pub struct SealHelperFile {
     pub entries: Vec<OffsetEntryRebuildData>
 }
 
+#[derive(Clone)]
 pub struct IMEntry {
     pub key: EntryKey,
     pub file: PathBuf,
@@ -70,6 +71,14 @@ impl OffsetEntryRebuildData {
             size: self.size,
         }
     }
+    pub fn from_im_entry(entry: &IMEntry) -> Self {
+        Self {
+            key: entry.key.clone(),
+            size: entry.size,
+            offset: entry.offset,
+            deleted: false,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -83,6 +92,14 @@ impl BagStoreFileHeaders {
     pub fn for_init(file_id: u16) -> Self {
         Self {
             is_sealed: false,
+            is_locked: false,
+            is_deleted: false,
+            file_id
+        }
+    }
+    pub fn for_sealed(file_id: u16) -> Self {
+        Self {
+            is_sealed: true,
             is_locked: false,
             is_deleted: false,
             file_id

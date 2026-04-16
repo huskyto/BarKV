@@ -4,7 +4,10 @@ use std::path::PathBuf;
 use std::collections::HashMap;
 
 use crate::io;
+use crate::model::IMEntry;
+use crate::model::EntryKey;
 use crate::model::BagRootEntry;
+use crate::model::SealHelperFile;
 use crate::model::BagStoreFileHeaders;
 use crate::model::OffsetEntryRebuildData;
 use crate::util;
@@ -27,7 +30,7 @@ pub(super) fn build_bag_path(store_root_path: &Path, bag_key: &BagKey, file_id: 
     store_root_path.join(bag_filename)
 }
 
-        // Replay //
+        // REPLAY //
 
 pub(super) fn rebuild_bag_history(bag_root: &BagRootEntry) -> Result<Bag, EngineError> {
     let root_file_path = PathBuf::from(&bag_root.root_path);
@@ -87,8 +90,7 @@ pub(super) fn rebuild_bag_history(bag_root: &BagRootEntry) -> Result<Bag, Engine
 }
 
 
-        // Sealing and Compaction //
-
+        // COMPACTION //
 
 pub(super) fn compact_partial(bag: &mut Bag, updated_headers: Option<BagStoreFileHeaders>) -> Result<Vec<OffsetEntryRebuildData>, EngineError> {
     let path = &bag.active_path;
@@ -134,6 +136,147 @@ pub(super) fn compact_partial(bag: &mut Bag, updated_headers: Option<BagStoreFil
 
     Ok(offset_data)
 }
+
+#[derive(Clone)]
+struct FileInfo {
+    filepath: PathBuf,
+    file_id: u16,
+    is_locked: bool,
+    is_sealed: bool
+}
+
+pub (super) fn full_compaction(bag: &mut Bag, store_root_path: &Path) -> Result<(), EngineError> {
+    let file_chain = get_bag_file_chain(bag)?;
+    let mut full_entries_map: HashMap<EntryKey, (FileInfo, ODIntermediateEntry)> = HashMap::new();
+    let current_timestamp_millis = util::current_timestamp();
+
+    for file_path in file_chain {
+                    // Process Entries //
+        let mut file_handle = io::open_file_for_read(&file_path)?;
+        let data = io::read_all_file(&mut file_handle)?;
+        io::close_file(&mut file_handle)?;
+        let decode_data = encoding::decode_bag_store_file_int_entries(&data)?;
+
+        let file_info = FileInfo {
+            filepath: file_path.clone(),
+            file_id: decode_data.headers.file_id,
+            is_locked: decode_data.headers.is_locked,
+            is_sealed: decode_data.headers.is_sealed,
+        };
+
+        for entry in decode_data.int_entries {
+            if entry.is_tombstone {
+                    // We can use tombstone to remove previous ones with full compaction.
+                full_entries_map.remove(&entry.key);
+            }
+            else if let Some(expiry) = entry.expiry && expiry <= current_timestamp_millis  {
+                    // Directly remove in full compaction.
+                full_entries_map.remove(&entry.key);
+            }
+            else {
+                    // Overwrite is still enough.
+                full_entries_map.insert(entry.key.clone(), (file_info.clone(), entry));
+            }
+        }
+    }
+
+    let mut map_by_file: HashMap<u16, (FileInfo, Vec<ODIntermediateEntry>)> = HashMap::new();
+
+            // TODO possible target for optimization. Verify with perf data.
+    for (_, (file_info, entry)) in full_entries_map {
+        map_by_file.entry(file_info.file_id)
+            .or_insert_with(|| (file_info.clone(), Vec::new()))
+            .1.push(entry);
+    }
+
+    let mut sorted_by_file_id: Vec<(u16, (FileInfo, Vec<ODIntermediateEntry>))> = map_by_file.into_iter().collect();
+    sorted_by_file_id.sort_by_key(|(id, _)| *id);
+
+    let mut new_im_index: HashMap<String, IMEntry> = HashMap::new();
+
+    for (file_id, (file_info, file_entries)) in sorted_by_file_id {
+        if file_info.is_sealed {
+                        // Update sealed helper file
+            let next_file_path = build_bag_path(store_root_path,
+                    &bag.key, file_id as usize + 1);
+
+            let mut offset_data = Vec::new();
+            for file_entry in file_entries {
+                let entry_key = &file_entry.key;
+                if let Some(c_entry) = bag.entries.get(entry_key) {
+                    if c_entry.file != file_info.filepath {
+                                // Entry should be in same file.
+                        return Err(EngineError::EntryConsistencyError);
+                    }
+                    let entry_rebuild_data = OffsetEntryRebuildData::from_im_entry(c_entry);
+                    offset_data.push(entry_rebuild_data);
+                    new_im_index.insert(c_entry.key.clone(), c_entry.clone());
+                }
+                else {
+                            // Entry should always be present.
+                    return Err(EngineError::EntryConsistencyError);
+                }
+            }
+
+            let seal_helper_data = SealHelperFile {
+                next_file: next_file_path.clone(),
+                entries: offset_data,
+            };
+            let encoded_seal_file = encoding::encode_seal_helper_file(&seal_helper_data)?;
+            let seal_file_path = get_sealed_file_path(&file_info.filepath);
+            let mut seal_file_handle = io::create_file_to_append(&seal_file_path)?;
+            io::write_all(&mut seal_file_handle, &encoded_seal_file)?;
+            io::close_file(&mut seal_file_handle)?;
+        }
+        else if file_info.is_locked {
+            let new_headers = BagStoreFileHeaders::for_sealed(file_info.file_id);
+            let (bag_store_data, offset_data) = 
+                    encoding::encode_bag_store_file_full(&new_headers, &file_entries)?;
+
+            io::overwrite(&file_info.filepath, &bag_store_data)?;
+
+                        // Update IMEntries
+            for offset_entry in &offset_data {
+                let updated_im_entry = offset_entry.to_im_entry(&file_info.filepath);
+                new_im_index.insert(offset_entry.key.clone(), updated_im_entry);
+            }
+
+                        // Create sealed helper file
+            let next_file_path = build_bag_path(store_root_path,
+                    &bag.key, file_id as usize + 1);
+            let seal_helper_data = SealHelperFile {
+                next_file: next_file_path.clone(),
+                entries: offset_data,
+            };
+            let encoded_seal_file = encoding::encode_seal_helper_file(&seal_helper_data)?;
+            let seal_file_path = get_sealed_file_path(&file_info.filepath);
+            let mut seal_file_handle = io::create_file_to_append(&seal_file_path)?;
+            io::write_all(&mut seal_file_handle, &encoded_seal_file)?;
+            io::close_file(&mut seal_file_handle)?;
+        }
+        else {
+            let new_headers = BagStoreFileHeaders::for_init(file_info.file_id);
+            let (bag_store_data, offset_data) = 
+            encoding::encode_bag_store_file_full(&new_headers, &file_entries)?;
+            
+                        // Update IMEntries
+            for offset_entry in &offset_data {
+                let updated_im_entry = offset_entry.to_im_entry(&file_info.filepath);
+                new_im_index.insert(offset_entry.key.clone(), updated_im_entry);
+            }
+            
+                        // Store updated file.
+            io::overwrite(&file_info.filepath, &bag_store_data)?;
+        }
+    }
+
+    bag.entries = new_im_index;
+    bag.file_handle = io::open_file_to_append(&bag.active_path)?;
+    Ok(())
+}
+
+
+        // HELPERS //
 
 pub(super) fn get_bag_file_chain(bag: &Bag) -> Result<Vec<PathBuf>, EngineError> {
     let mut res = Vec::new();
