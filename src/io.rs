@@ -18,6 +18,13 @@ pub fn read_all_file(file: &mut File) -> Result<Vec<u8>, Error> {
     Ok(buffer)
 }
 
+pub fn read_file_contents(path: &Path) -> Result<Vec<u8>, Error> {
+    let mut file_handle = open_file_for_read(path)?;
+    let data = read_all_file(&mut file_handle)?;
+    close_file(&mut file_handle)?;
+    Ok(data)
+}
+
 pub fn read_chunk(file: &mut File, offset: u64, size: u64) -> Result<Vec<u8>, Error> {
     file.seek(SeekFrom::Start(offset))?;
     let mut chunk_buffer = Vec::with_capacity(size as usize);
@@ -50,6 +57,18 @@ pub fn overwrite(path: &Path, data: &[u8]) -> Result<(), Error> {
     fs::rename(path, &back_path)?;
     fs::rename(tmp_path, path)?;
     fs::remove_file(back_path)?;
+
+    Ok(())
+}
+
+pub fn create_or_overwrite(path: &Path, data: &[u8]) -> Result<(), Error> {
+    if fs::exists(path)? {
+        overwrite(path, data)?;
+    }
+    else {
+        let mut file_handle = create_file_to_append(path)?;
+        write_all(&mut file_handle, data)?;
+    }
 
     Ok(())
 }

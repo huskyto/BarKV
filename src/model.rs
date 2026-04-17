@@ -97,6 +97,14 @@ impl BagStoreFileHeaders {
             file_id
         }
     }
+    pub fn for_locked(file_id: u16) -> Self {
+        Self {
+            is_sealed: false,
+            is_locked: true,
+            is_deleted: false,
+            file_id
+        }
+    }
     pub fn for_sealed(file_id: u16) -> Self {
         Self {
             is_sealed: true,
@@ -191,4 +199,23 @@ impl ODIntermediateEntry {
     }
 }
 
+
+
+#[derive(Clone)]
+pub struct FileInfo {
+    pub filepath: PathBuf,
+    pub file_id: u16,
+    pub is_locked: bool,
+    pub is_sealed: bool
+}
+impl FileInfo {
+    pub fn from(headers: &BagStoreFileHeaders, path: PathBuf) -> Self {
+        Self {
+            filepath:  path.clone(),
+            file_id:   headers.file_id,
+            is_locked: headers.is_locked,
+            is_sealed: headers.is_sealed,
+        }
+    }
+}
 

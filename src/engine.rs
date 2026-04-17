@@ -18,7 +18,6 @@ use crate::model::BagKey;
 use crate::model::IMEntry;
 use crate::model::EntryKey;
 use crate::model::StoreArchive;
-use crate::model::SealHelperFile;
 use crate::model::ODIntermediateEntry;
 use crate::validation;
 use crate::validation::ValidationFailure;
@@ -504,30 +503,17 @@ impl BarKVEngine {
         let bag = self.store.bags.get_mut(bag_key)
                 .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
 
-        let updated_headers = BagStoreFileHeaders {
-            is_sealed: false,
-            is_locked: true,
-            is_deleted: false,
-            file_id: bag.current_file_id
-        };
-
+        let updated_headers = BagStoreFileHeaders::for_locked(bag.current_file_id);
         let offset_data = upkeep::compact_partial(bag, Some(updated_headers))?;
 
                 // Create sealed helper file
         let next_file_path = upkeep::build_bag_path(&self.root_path,
                     bag_key, bag.current_file_id as usize + 1);
-        let seal_helper_data = SealHelperFile {
-            next_file: next_file_path.clone(),
-            entries: offset_data,
-        };
-        let encoded_seal_file = encoding::encode_seal_helper_file(&seal_helper_data)?;
-        let seal_file_path = upkeep::get_sealed_file_path(&bag.active_path);
-        let mut seal_file_handle = io::create_file_to_append(&seal_file_path)?;
-        io::write_all(&mut seal_file_handle, &encoded_seal_file)?;
-        io::close_file(&mut seal_file_handle)?;
+        upkeep::created_sealed_helper_file(&bag.active_path, offset_data, &next_file_path)?;
 
                 // Update Bag
         let mut next_file_handle = io::create_file_to_append(&next_file_path)?;
+
         bag.current_file_id += 1;
         bag.active_path = next_file_path;
 
