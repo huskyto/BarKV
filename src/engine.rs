@@ -75,12 +75,6 @@ impl BarKVEngine {
         Ok(())
     }
 
-    fn lock_if_needed(&mut self, bag_key: &BagKey, new_size: usize) -> Result<(), EngineError> {
-        if new_size >= MIN_LOCK_SIZE {
-            self.lock_active(bag_key)
-        } else { Ok(()) }
-    }
-
     pub fn delete(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<(), EngineError> {
         let bag = self.store.bags.get_mut(bag_key)
                 .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
@@ -113,10 +107,6 @@ impl BarKVEngine {
 
         Ok(keys)
     }
-
-    // pub fn list_entries(&self, bag_key: &BagKey) -> Result<Vec<KVPair>, EngineError> {
-    //     todo!()
-    // }
 
 
             // BAGS //
@@ -267,10 +257,6 @@ impl BarKVEngine {
         Ok(())
     }
 
-    // pub fn sync(&mut self) {
-    //     todo!()     // what what this supposed to do? probably no need... I think
-    // }
-    
     pub fn compact_active(&mut self) -> Vec<(BagKey, Result<(), EngineError>)> {
         self.store.bags.iter_mut()
                 .map(|(key, bag)| {
@@ -494,6 +480,12 @@ impl BarKVEngine {
 
 
             // INTERNAL //
+
+    fn lock_if_needed(&mut self, bag_key: &BagKey, new_size: usize) -> Result<(), EngineError> {
+        if new_size >= MIN_LOCK_SIZE {
+            self.lock_active(bag_key)
+        } else { Ok(()) }
+    }
 
     fn get_store_file_path(&self) -> PathBuf {
         self.root_path.join(STORE_FILENAME)
