@@ -18,15 +18,17 @@ use crate::model::BagKey;
 use crate::model::ODIntermediateEntry;
 
 
+const SEAL_FILE_EXTENSION: &str = "seal";
+const BAG_STORE_FILE_EXTENSION: &str = "bkv";
 
 pub(super) fn get_sealed_file_path(base_file_path: &Path) -> PathBuf {
-    base_file_path.with_extension("seal")
+    base_file_path.with_extension(SEAL_FILE_EXTENSION)
 }
 pub(super) fn is_file_seal(path: &Path) -> bool {
-    path.extension().is_some_and(|ext| ext == "seal")
+    path.extension().is_some_and(|ext| ext == SEAL_FILE_EXTENSION)
 }
 pub(super) fn build_bag_path(store_root_path: &Path, bag_key: &BagKey, file_id: usize) -> PathBuf {
-    let bag_filename = format!("{bag_key}-{file_id}.bkv");
+    let bag_filename = format!("{bag_key}-{file_id}.{BAG_STORE_FILE_EXTENSION}");
     store_root_path.join(bag_filename)
 }
 
