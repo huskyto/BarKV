@@ -41,14 +41,14 @@ impl BarKVEngine {
 
             // VALUES //
 
-    pub async fn get(&self, bag_key: &BagKey, key: &EntryKey) -> Result<Vec<u8>, EngineError> {
+    pub fn get(&self, bag_key: &BagKey, key: &EntryKey) -> Result<Vec<u8>, EngineError> {
         self.check_open()?;
         self.with_bag(bag_key, |bag| {
             Self::retrieve_value(key, bag)
         })
     }
 
-    pub async fn set(&self, bag_key: &BagKey, key: &EntryKey, value: &[u8]) -> Result<(), EngineError> {
+    pub fn set(&self, bag_key: &BagKey, key: &EntryKey, value: &[u8]) -> Result<(), EngineError> {
         self.check_open()?;
         let new_size = self.with_bag(bag_key, |bag| {
             Self::insert_value(bag, key, value)
@@ -58,7 +58,7 @@ impl BarKVEngine {
         Ok(())
     }
     
-    pub async fn delete(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<(), EngineError> {
+    pub fn delete(&self, bag_key: &BagKey, key: &EntryKey) -> Result<(), EngineError> {
         self.check_open()?;
         let new_size = self.with_bag(bag_key, |bag| {
             Self::remove_value(key, bag)
@@ -68,14 +68,14 @@ impl BarKVEngine {
         Ok(())
     }
 
-    pub async fn exists(&self, bag_key: &BagKey, key: &EntryKey) -> Result<bool, EngineError> {
+    pub fn exists(&self, bag_key: &BagKey, key: &EntryKey) -> Result<bool, EngineError> {
         self.check_open()?;
         self.with_bag(bag_key, |bag| {
             Ok(bag.entries.contains_key(key))
         })
     }
 
-    pub async fn list_keys(&self, bag_key: &BagKey) -> Result<Vec<EntryKey>, EngineError> {
+    pub fn list_keys(&self, bag_key: &BagKey) -> Result<Vec<EntryKey>, EngineError> {
         self.check_open()?;
         self.with_bag(bag_key, |bag| {
             let keys = bag.entries.keys().cloned().collect();
@@ -86,7 +86,7 @@ impl BarKVEngine {
 
             // BAGS //
 
-    pub async fn create_bag(&mut self, bag_key: &BagKey) -> Result<(), EngineError> {
+    pub fn create_bag(&self, bag_key: &BagKey) -> Result<(), EngineError> {
         self.check_open()?;
         let mut store = self.store.write().map_err(|_| EngineError::LockPoisoned)?;
 
@@ -126,7 +126,7 @@ impl BarKVEngine {
         Ok(())
     }
 
-    pub async fn drop_bag(&mut self, bag_key: &BagKey) -> Result<(), EngineError> {
+    pub fn drop_bag(&self, bag_key: &BagKey) -> Result<(), EngineError> {
         self.check_open()?;
         let mut store = self.store.write().map_err(|_| EngineError::LockPoisoned)?;
 
@@ -149,14 +149,14 @@ impl BarKVEngine {
         Ok(())
     }
 
-    pub async fn len_bag(&self, bag_key: &BagKey) -> Result<usize, EngineError> {
+    pub fn len_bag(&self, bag_key: &BagKey) -> Result<usize, EngineError> {
         self.check_open()?;
         self.with_bag(bag_key, |bag| {
             Ok(bag.entries.len())
         })
     }
 
-    pub async fn list_bags(&self) -> Result<Vec<BagKey>, EngineError> {
+    pub fn list_bags(&self) -> Result<Vec<BagKey>, EngineError> {
         self.check_open()?;
         let store = self.store.read().map_err(|_| EngineError::LockPoisoned)?;
         Ok(store.bags.keys()
@@ -218,14 +218,13 @@ impl BarKVEngine {
             closed: AtomicBool::new(false),
         };
 
-        if let Ok(store) = &res.store.read() {
-            let init_data = encoding::encode_store_file(store)?;
-            io::write_all(&mut root_file, &init_data)?;
-        }
-        else {
-            return Err(EngineError::LockPoisoned);
-        }
+        let init_data = {
+            let store = &res.store.read()
+                    .map_err(|_| EngineError::LockPoisoned)?;
+            encoding::encode_store_file(store)?
+        };
 
+        io::write_all(&mut root_file, &init_data)?;
         Ok(res)
     }
 
@@ -241,8 +240,10 @@ impl BarKVEngine {
         }
     }
 
-    pub async fn close(&mut self) -> Result<(), EngineError> {
+    pub fn close(&self) -> Result<(), EngineError> {
         self.check_open()?;
+        self.closed.store(true, Ordering::Release);
+
         let bag_keys: Vec<BagKey> = {
             let store = self.store.read().map_err(|_| EngineError::LockPoisoned)?;
             store.bags.keys().cloned().collect()
@@ -257,7 +258,7 @@ impl BarKVEngine {
         Ok(())
     }
 
-    pub async fn compact_active(&mut self) -> Vec<(BagKey, Result<(), EngineError>)> {
+    pub fn compact_active(&self) -> Vec<(BagKey, Result<(), EngineError>)> {
         if let Err(e) = self.check_open() {
             return vec![("".to_string(), Err(e))];
         }
@@ -280,7 +281,7 @@ impl BarKVEngine {
         res
     }
 
-    pub async fn full_compaction(&mut self) -> Vec<(BagKey, Result<(), EngineError>)>  {
+    pub fn full_compaction(&self) -> Vec<(BagKey, Result<(), EngineError>)>  {
         if let Err(e) = self.check_open() {
             return vec![("".to_string(), Err(e))];
         }
@@ -306,68 +307,52 @@ impl BarKVEngine {
 
             // ATOMIC //
             
-            // TODO Make these actually atomic once concurrency is added.
-    
-    pub async fn get_or_set(&mut self, bag_key: &BagKey, key: &EntryKey, value: &[u8]) -> Result<Vec<u8>, EngineError> {
+    pub fn get_or_set(&self, bag_key: &BagKey, key: &EntryKey, value: &[u8]) -> Result<Vec<u8>, EngineError> {
         self.check_open()?;
-        self.with_bag(bag_key, |bag| {
+        let (value, new_size) = self.with_bag(bag_key, |bag| {
             if bag.entries.contains_key(key) {
-                Self::retrieve_value(key, bag)
+                Ok((Self::retrieve_value(key, bag)?, None))
             } else {
-                let new_size = self.with_bag(bag_key, |bag| {
-                    Self::insert_value(bag, key, value)
-                })?;
-            
-                self.lock_if_needed(bag_key, new_size)?;
-                Ok(value.to_vec())
-            }
-        })
-    }
-
-    pub async fn update_if_different(&mut self, bag_key: &BagKey, key: &EntryKey, value: &[u8]) -> Result<(), EngineError> {
-        self.check_open()?;
-        self.with_bag(bag_key, |bag| {
-            if bag.entries.contains_key(key) {
-                let current_value = Self::retrieve_value(key, bag)?;
-                if current_value != value {
-                    let new_size = self.with_bag(bag_key, |bag| {
-                        Self::insert_value(bag, key, value)
-                    })?;
                 
-                    self.lock_if_needed(bag_key, new_size)?;
-                }
+                Ok((value.to_vec(), Some(Self::insert_value(bag, key, value)?)))
             }
-            else {
-                return Err(EngineError::NoSuchEntryKeyError(key.clone()));
-            }
+        })?;
 
-            Ok(())
-        })
+        if let Some(new_size) = new_size { self.lock_if_needed(bag_key, new_size)?; }
+        Ok(value)
     }
 
-    pub async fn get_and_delete(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<Vec<u8>, EngineError> {
+    pub fn update_if_different(&self, bag_key: &BagKey, key: &EntryKey, value: &[u8]) -> Result<(), EngineError> {
         self.check_open()?;
-        self.with_bag(bag_key, |bag| {
-            if bag.entries.contains_key(key) {
-                let value = Self::retrieve_value(key, bag)?;
-
-                let new_size = self.with_bag(bag_key, |bag| {
-                    Self::remove_value(key, bag)
-                })?;                
-                self.lock_if_needed(bag_key, new_size)?;
-
-                Ok(value)
+        let new_size = self.with_bag(bag_key, |bag| {
+            let current_value = Self::retrieve_value(key, bag)?;
+            if current_value != value {
+                Ok(Some(Self::insert_value(bag, key, value)?))
             }
-            else {
-                Err(EngineError::NoSuchEntryKeyError(key.clone()))
-            }
-        })
+            else { Ok(None) }
+        })?;
+
+        if let Some(new_size) = new_size {
+            self.lock_if_needed(bag_key, new_size)?;
+        }
+        Ok(())
+    }
+
+    pub fn get_and_delete(&self, bag_key: &BagKey, key: &EntryKey) -> Result<Vec<u8>, EngineError> {
+        self.check_open()?;
+        let (value, new_size) = self.with_bag(bag_key, |bag| {
+            let value = Self::retrieve_value(key, bag)?;
+            Ok((value, Self::remove_value(key, bag)?))
+        })?;
+
+        self.lock_if_needed(bag_key, new_size)?;
+        Ok(value)
     }
 
 
             // BATCH OPS //
 
-    pub async fn get_many(&mut self, bag_key: &BagKey, keys: &[&EntryKey]) -> Result<Vec<KVPair>, EngineError> {
+    pub fn get_many(&self, bag_key: &BagKey, keys: &[&EntryKey]) -> Result<Vec<KVPair>, EngineError> {
         self.check_open()?;
         self.with_bag(bag_key, |bag| {
             let mut res = Vec::new();
@@ -384,45 +369,45 @@ impl BarKVEngine {
         })
     }
 
-    pub async fn set_many(&mut self, bag_key: &BagKey, pairs: Vec<KVPair>) -> Result<(), EngineError> {
+    pub fn set_many(&self, bag_key: &BagKey, pairs: Vec<KVPair>) -> Result<(), EngineError> {
         self.check_open()?;
-        self.with_bag(bag_key, |bag| {
-            let mut new_size = 0;
+        let mut new_size = 0;
 
+        self.with_bag(bag_key, |bag| {
             for pair in pairs {
                 new_size = Self::insert_value(bag, &pair.key, &pair.value)?;
             }
-
-            self.lock_if_needed(bag_key, new_size)?;
-
             Ok(())
-        })
+        })?;
+
+        self.lock_if_needed(bag_key, new_size)?;
+        Ok(())
     }
 
-    pub async fn delete_many(&mut self, bag_key: &BagKey, keys: &[&EntryKey]) -> Result<(), EngineError> {
+    pub fn delete_many(&self, bag_key: &BagKey, keys: &[&EntryKey]) -> Result<(), EngineError> {
         self.check_open()?;
-        self.with_bag(bag_key, |bag| {
-            let mut new_size = 0;
+        let mut new_size = 0;
 
+        self.with_bag(bag_key, |bag| {
             for &key in keys {
                 if !bag.entries.contains_key(key) { continue }
         
                 new_size = Self::remove_value(key, bag)?;
             }
-
-            self.lock_if_needed(bag_key, new_size)?;
-
             Ok(())
-        })
+        })?;
+
+        self.lock_if_needed(bag_key, new_size)?;
+        Ok(())
     }
 
 
             // TTL
     
-    pub async fn set_with_expiry(&mut self, bag_key: &BagKey, key: &EntryKey,
+    pub fn set_with_expiry(&self, bag_key: &BagKey, key: &EntryKey,
                 value: &[u8], ttl: u128) -> Result<(), EngineError> {
         self.check_open()?;
-        self.with_bag(bag_key, |bag| {
+        let new_size = self.with_bag(bag_key, |bag| {
             let expiry = util::current_timestamp() + ttl;
             let od_in_entry = ODIntermediateEntry::make_expiring(key.into(), value.to_vec(), expiry);
             let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
@@ -437,14 +422,14 @@ impl BarKVEngine {
 
             bag.entries.insert(key.clone(), im_entry);
 
-            let new_size = offset as usize + encoded_entry.len();
-            self.lock_if_needed(bag_key, new_size)?;
+            Ok(offset as usize + encoded_entry.len())
+        })?;
 
-            Ok(())
-        })
+        self.lock_if_needed(bag_key, new_size)?;
+        Ok(())
     }
 
-    pub async fn ttl(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<u128, EngineError> {
+    pub fn ttl(&self, bag_key: &BagKey, key: &EntryKey) -> Result<u128, EngineError> {
         self.check_open()?;
         self.with_bag(bag_key, |bag| {
             let entry = bag.entries.get(key)
@@ -468,48 +453,25 @@ impl BarKVEngine {
         })
     }
 
-    pub async fn persist(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<(), EngineError> {
+    pub fn persist(&self, bag_key: &BagKey, key: &EntryKey) -> Result<(), EngineError> {
         self.check_open()?;
-        self.with_bag(bag_key, |bag| {
-            let entry = bag.entries.get(key)
-                    .ok_or_else(|| EngineError::NoSuchEntryKeyError(key.to_string()))?;
+        let new_size = self.with_bag(bag_key, |bag| {
+            let value = Self::retrieve_value(key, bag)?;
+            Self::insert_value(bag, key, &value)
+        })?;
 
-            let read_chunk = if entry.file == bag.active_path {
-                io::read_chunk(&mut bag.file_handle, entry.offset, entry.size)?
-            } else {
-                let mut file_handle = io::open_file_for_read(&entry.file)?;
-                io::read_chunk(&mut file_handle, entry.offset, entry.size)?
-            };
-            let value = encoding::get_value_from_entry_data(&read_chunk)?;
-
-            let od_in_entry = ODIntermediateEntry::make_update(key.into(), value);
-            let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
-            let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
-
-            let im_entry = IMEntry {
-                key: key.into(),
-                file: bag.active_path.clone(),
-                offset,
-                size: encoded_entry.len() as u64,
-            };
-
-            bag.entries.insert(key.clone(), im_entry);
-
-            let new_size = offset as usize + encoded_entry.len();
-            self.lock_if_needed(bag_key, new_size)?;
-
-            Ok(())
-        })
+        self.lock_if_needed(bag_key, new_size)?;
+        Ok(())
     }
 
 
             // STATE // TODO Extension.
     
-    pub async fn stats(&self) {
+    pub fn stats(&self) {
         todo!()     // TODO Stats model
     }
 
-    pub async fn validate(&self) -> Vec<ValidationFailure> {
+    pub fn validate(&self) -> Vec<ValidationFailure> {
         validation::validate(self)
     }
 
