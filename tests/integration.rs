@@ -3,28 +3,28 @@ use tempfile::TempDir;
 use std::time::SystemTime;
 
 use bar_kv::model::KVPair;
-use bar_kv::engine::BarKVEngine;
-use bar_kv::engine::EngineError;
+use bar_kv::BarKV;
+use bar_kv::EngineError;
 
 use std::time::UNIX_EPOCH;
 
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-fn new_engine() -> (TempDir, BarKVEngine) {
+fn new_engine() -> (TempDir, BarKV) {
     let dir = TempDir::new().unwrap();
-    let engine = BarKVEngine::create(dir.path().to_str().unwrap()).unwrap();
+    let engine = BarKV::create(dir.path().to_str().unwrap()).unwrap();
     (dir, engine)
 }
 
-fn new_engine_with_bag(bag: &str) -> (TempDir, BarKVEngine) {
+fn new_engine_with_bag(bag: &str) -> (TempDir, BarKV) {
     let (dir, engine) = new_engine();
     engine.create_bag(&bag.to_string()).unwrap();
     (dir, engine)
 }
 
-fn reopen(dir: &TempDir) -> BarKVEngine {
-    BarKVEngine::open(dir.path().to_str().unwrap()).unwrap()
+fn reopen(dir: &TempDir) -> BarKV {
+    BarKV::open(dir.path().to_str().unwrap()).unwrap()
 }
 
 /// Write enough unique entries to push the active file past MIN_LOCK_SIZE
@@ -33,7 +33,7 @@ fn reopen(dir: &TempDir) -> BarKVEngine {
 /// Each entry is ~(25 header + key_bytes + value_bytes).
 /// With an 8-byte key and 100-byte value that is 133 bytes/entry.
 /// ⌈10 000 / 133⌉ ≈ 76 entries per file, so `76 * rotations + margin`.
-fn fill_to_rotations(engine: &BarKVEngine, bag: &str, rotations: usize) {
+fn fill_to_rotations(engine: &BarKV, bag: &str, rotations: usize) {
     let value = vec![0xABu8; 100];
     let count = 80 * rotations;
     for i in 0..count {
@@ -59,15 +59,15 @@ fn now_millis() -> u128 {
 fn lifecycle_create_then_open() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap();
-    drop(BarKVEngine::create(path).unwrap());
-    let engine = BarKVEngine::open(path).unwrap();
+    drop(BarKV::create(path).unwrap());
+    let engine = BarKV::open(path).unwrap();
     assert!(engine.list_bags().unwrap().is_empty());
 }
 
 #[test]
 fn lifecycle_open_or_create_on_empty_dir() {
     let dir = TempDir::new().unwrap();
-    let engine = BarKVEngine::open_or_create(dir.path().to_str().unwrap()).unwrap();
+    let engine = BarKV::open_or_create(dir.path().to_str().unwrap()).unwrap();
     assert!(engine.list_bags().unwrap().is_empty());
 }
 
@@ -76,27 +76,27 @@ fn lifecycle_open_or_create_opens_existing_store() {
     let (dir, engine) = new_engine();
     engine.create_bag(&BAG.to_string()).unwrap();
     drop(engine);
-    let engine = BarKVEngine::open_or_create(dir.path().to_str().unwrap()).unwrap();
+    let engine = BarKV::open_or_create(dir.path().to_str().unwrap()).unwrap();
     assert!(engine.list_bags().unwrap().contains(&BAG.to_string()));
 }
 
 #[test]
 fn lifecycle_create_on_non_empty_dir_fails() {
     let (dir, _engine) = new_engine();
-    let result = BarKVEngine::create(dir.path().to_str().unwrap());
+    let result = BarKV::create(dir.path().to_str().unwrap());
     assert!(matches!(result, Err(EngineError::RootPathNotEmpty)));
 }
 
 #[test]
 fn lifecycle_open_on_dir_without_store_file_fails() {
     let dir = TempDir::new().unwrap();
-    let result = BarKVEngine::open(dir.path().to_str().unwrap());
+    let result = BarKV::open(dir.path().to_str().unwrap());
     assert!(matches!(result, Err(EngineError::RootFileNotFound)));
 }
 
 #[test]
 fn lifecycle_open_on_invalid_path_fails() {
-    let result = BarKVEngine::open("/this/path/does/not/exist/at/all");
+    let result = BarKV::open("/this/path/does/not/exist/at/all");
     assert!(result.is_err());
 }
 

@@ -31,9 +31,9 @@ use crate::validation::ValidationFailure;
 pub(crate) const STORE_FILENAME: &str = "barkv.store";
 const MIN_LOCK_SIZE: usize = 10_000;        // TODO move to config
 
-pub struct BarKVEngine {
-    pub(super) store: RwLock<StoreArchive>,
-    pub(super) root_path: PathBuf,
+pub(crate) struct BarKVEngine {
+    pub(crate) store: RwLock<StoreArchive>,
+    pub(crate) root_path: PathBuf,
     closed: AtomicBool,
 }
 
@@ -167,7 +167,7 @@ impl BarKVEngine {
 
             // LIFECYCLE //
 
-    pub fn open(path: &str) -> Result<BarKVEngine, EngineError> {
+    pub(crate) fn open(path: &str) -> Result<BarKVEngine, EngineError> {
         let path = PathBuf::from(path);
         if !path.is_dir() {
             return Err(EngineError::RootPathError);
@@ -197,7 +197,7 @@ impl BarKVEngine {
         Ok(engine)
     }
 
-    pub fn create(path: &str) -> Result<BarKVEngine, EngineError> {
+    pub(crate) fn create(path: &str) -> Result<BarKVEngine, EngineError> {
         let path = PathBuf::from(path);
         if !path.is_dir() {
             return Err(EngineError::RootPathError)
@@ -228,7 +228,7 @@ impl BarKVEngine {
         Ok(res)
     }
 
-    pub fn open_or_create(path: &str) -> Result<BarKVEngine, EngineError> {
+    pub(crate) fn open_or_create(path: &str) -> Result<BarKVEngine, EngineError> {
         match Self::open(path) {
             Ok(engine) => Ok(engine),
             Err(e) => {
@@ -512,7 +512,7 @@ impl BarKVEngine {
         self.root_path.join(STORE_FILENAME)
     }
 
-    pub(super) fn lock_active(&self, bag_key: &BagKey) -> Result<(), EngineError> {
+    pub(crate) fn lock_active(&self, bag_key: &BagKey) -> Result<(), EngineError> {
         let bag_arc = self.get_bag_arc(bag_key)?;
         let mut bag = bag_arc.lock().map_err(|_| EngineError::LockPoisoned)?;
 
