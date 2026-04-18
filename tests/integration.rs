@@ -18,7 +18,7 @@ fn new_engine() -> (TempDir, BarKVEngine) {
 }
 
 fn new_engine_with_bag(bag: &str) -> (TempDir, BarKVEngine) {
-    let (dir, mut engine) = new_engine();
+    let (dir, engine) = new_engine();
     engine.create_bag(&bag.to_string()).unwrap();
     (dir, engine)
 }
@@ -33,7 +33,7 @@ fn reopen(dir: &TempDir) -> BarKVEngine {
 /// Each entry is ~(25 header + key_bytes + value_bytes).
 /// With an 8-byte key and 100-byte value that is 133 bytes/entry.
 /// ⌈10 000 / 133⌉ ≈ 76 entries per file, so `76 * rotations + margin`.
-fn fill_to_rotations(engine: &mut BarKVEngine, bag: &str, rotations: usize) {
+fn fill_to_rotations(engine: &BarKVEngine, bag: &str, rotations: usize) {
     let value = vec![0xABu8; 100];
     let count = 80 * rotations;
     for i in 0..count {
@@ -61,23 +61,23 @@ fn lifecycle_create_then_open() {
     let path = dir.path().to_str().unwrap();
     drop(BarKVEngine::create(path).unwrap());
     let engine = BarKVEngine::open(path).unwrap();
-    assert!(engine.list_bags().is_empty());
+    assert!(engine.list_bags().unwrap().is_empty());
 }
 
 #[test]
 fn lifecycle_open_or_create_on_empty_dir() {
     let dir = TempDir::new().unwrap();
     let engine = BarKVEngine::open_or_create(dir.path().to_str().unwrap()).unwrap();
-    assert!(engine.list_bags().is_empty());
+    assert!(engine.list_bags().unwrap().is_empty());
 }
 
 #[test]
 fn lifecycle_open_or_create_opens_existing_store() {
-    let (dir, mut engine) = new_engine();
+    let (dir, engine) = new_engine();
     engine.create_bag(&BAG.to_string()).unwrap();
     drop(engine);
     let engine = BarKVEngine::open_or_create(dir.path().to_str().unwrap()).unwrap();
-    assert!(engine.list_bags().contains(&BAG.to_string()));
+    assert!(engine.list_bags().unwrap().contains(&BAG.to_string()));
 }
 
 #[test]
@@ -105,10 +105,10 @@ fn lifecycle_open_on_invalid_path_fails() {
 
 #[test]
 fn bag_create_and_list() {
-    let (_dir, mut engine) = new_engine();
+    let (_dir, engine) = new_engine();
     engine.create_bag(&"bag-a".to_string()).unwrap();
     engine.create_bag(&"bag-b".to_string()).unwrap();
-    let bags = engine.list_bags();
+    let bags = engine.list_bags().unwrap();
     assert_eq!(bags.len(), 2);
     assert!(bags.contains(&"bag-a".to_string()));
     assert!(bags.contains(&"bag-b".to_string()));
@@ -116,28 +116,28 @@ fn bag_create_and_list() {
 
 #[test]
 fn bag_create_duplicate_fails() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     let result = engine.create_bag(&BAG.to_string());
     assert!(matches!(result, Err(EngineError::BagAlreadyExistsError(_))));
 }
 
 #[test]
 fn bag_drop_removes_from_list() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.drop_bag(&BAG.to_string()).unwrap();
-    assert!(engine.list_bags().is_empty());
+    assert!(engine.list_bags().unwrap().is_empty());
 }
 
 #[test]
 fn bag_drop_nonexistent_fails() {
-    let (_dir, mut engine) = new_engine();
+    let (_dir, engine) = new_engine();
     let result = engine.drop_bag(&"ghost".to_string());
     assert!(matches!(result, Err(EngineError::NoSuchBagKeyError(_))));
 }
 
 #[test]
 fn bag_dropped_bag_rejects_further_ops() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k".to_string(), b"v").unwrap();
     engine.drop_bag(&BAG.to_string()).unwrap();
     assert!(engine.get(&BAG.to_string(), &"k".to_string()).is_err());
@@ -153,7 +153,7 @@ fn bag_len_empty() {
 
 #[test]
 fn bag_len_after_set_and_delete() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k1".to_string(), b"v1").unwrap();
     engine.set(&BAG.to_string(), &"k2".to_string(), b"v2").unwrap();
     assert_eq!(engine.len_bag(&BAG.to_string()).unwrap(), 2);
@@ -163,7 +163,7 @@ fn bag_len_after_set_and_delete() {
 
 #[test]
 fn bag_overwrite_does_not_inflate_len() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k".to_string(), b"v1").unwrap();
     engine.set(&BAG.to_string(), &"k".to_string(), b"v2").unwrap();
     engine.set(&BAG.to_string(), &"k".to_string(), b"v3").unwrap();
@@ -172,13 +172,13 @@ fn bag_overwrite_does_not_inflate_len() {
 
 #[test]
 fn bag_persist_across_reopen() {
-    let (dir, mut engine) = new_engine();
+    let (dir, engine) = new_engine();
     engine.create_bag(&"a".to_string()).unwrap();
     engine.create_bag(&"b".to_string()).unwrap();
     drop(engine);
 
     let engine = reopen(&dir);
-    let bags = engine.list_bags();
+    let bags = engine.list_bags().unwrap();
     assert_eq!(bags.len(), 2);
     assert!(bags.contains(&"a".to_string()));
     assert!(bags.contains(&"b".to_string()));
@@ -186,14 +186,14 @@ fn bag_persist_across_reopen() {
 
 #[test]
 fn bag_drop_persists_across_reopen() {
-    let (dir, mut engine) = new_engine();
+    let (dir, engine) = new_engine();
     engine.create_bag(&"a".to_string()).unwrap();
     engine.create_bag(&"b".to_string()).unwrap();
     engine.drop_bag(&"a".to_string()).unwrap();
     drop(engine);
 
     let engine = reopen(&dir);
-    assert_eq!(engine.list_bags(), vec!["b".to_string()]);
+    assert_eq!(engine.list_bags().unwrap(), vec!["b".to_string()]);
 }
 
 
@@ -201,7 +201,7 @@ fn bag_drop_persists_across_reopen() {
 
 #[test]
 fn crud_set_and_get() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"key".to_string(), b"hello world").unwrap();
     let val = engine.get(&BAG.to_string(), &"key".to_string()).unwrap();
     assert_eq!(val, b"hello world");
@@ -209,28 +209,28 @@ fn crud_set_and_get() {
 
 #[test]
 fn crud_get_missing_key_fails() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     let result = engine.get(&BAG.to_string(), &"ghost".to_string());
     assert!(matches!(result, Err(EngineError::NoSuchEntryKeyError(_))));
 }
 
 #[test]
 fn crud_get_from_missing_bag_fails() {
-    let (_dir, mut engine) = new_engine();
+    let (_dir, engine) = new_engine();
     let result = engine.get(&"no-bag".to_string(), &"k".to_string());
     assert!(matches!(result, Err(EngineError::NoSuchBagKeyError(_))));
 }
 
 #[test]
 fn crud_set_to_missing_bag_fails() {
-    let (_dir, mut engine) = new_engine();
+    let (_dir, engine) = new_engine();
     let result = engine.set(&"no-bag".to_string(), &"k".to_string(), b"v");
     assert!(matches!(result, Err(EngineError::NoSuchBagKeyError(_))));
 }
 
 #[test]
 fn crud_overwrite_returns_latest_value() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k".to_string(), b"v1").unwrap();
     engine.set(&BAG.to_string(), &"k".to_string(), b"v2").unwrap();
     engine.set(&BAG.to_string(), &"k".to_string(), b"v3").unwrap();
@@ -240,10 +240,10 @@ fn crud_overwrite_returns_latest_value() {
 
 #[test]
 fn crud_delete_removes_key() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k".to_string(), b"v").unwrap();
     engine.delete(&BAG.to_string(), &"k".to_string()).unwrap();
-    assert!(!engine.exists(&BAG.to_string(), &"k".to_string()));
+    assert!(!engine.exists(&BAG.to_string(), &"k".to_string()).unwrap());
     assert!(matches!(
         engine.get(&BAG.to_string(), &"k".to_string()),
         Err(EngineError::NoSuchEntryKeyError(_))
@@ -252,14 +252,14 @@ fn crud_delete_removes_key() {
 
 #[test]
 fn crud_delete_missing_key_fails() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     let result = engine.delete(&BAG.to_string(), &"ghost".to_string());
     assert!(matches!(result, Err(EngineError::NoSuchEntryKeyError(_))));
 }
 
 #[test]
 fn crud_double_delete_fails() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k".to_string(), b"v").unwrap();
     engine.delete(&BAG.to_string(), &"k".to_string()).unwrap();
     let result = engine.delete(&BAG.to_string(), &"k".to_string());
@@ -268,7 +268,7 @@ fn crud_double_delete_fails() {
 
 #[test]
 fn crud_set_after_delete_works() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k".to_string(), b"v1").unwrap();
     engine.delete(&BAG.to_string(), &"k".to_string()).unwrap();
     engine.set(&BAG.to_string(), &"k".to_string(), b"v2").unwrap();
@@ -279,25 +279,25 @@ fn crud_set_after_delete_works() {
 #[test]
 fn crud_exists_false_for_missing_key() {
     let (_dir, engine) = new_engine_with_bag(BAG);
-    assert!(!engine.exists(&BAG.to_string(), &"ghost".to_string()));
+    assert!(!engine.exists(&BAG.to_string(), &"ghost".to_string()).unwrap());
 }
 
 #[test]
 fn crud_exists_false_for_missing_bag() {
     let (_dir, engine) = new_engine();
-    assert!(!engine.exists(&"no-bag".to_string(), &"k".to_string()));
+    assert!(!engine.exists(&"no-bag".to_string(), &"k".to_string()).unwrap_or(false));
 }
 
 #[test]
 fn crud_exists_true_after_set() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k".to_string(), b"v").unwrap();
-    assert!(engine.exists(&BAG.to_string(), &"k".to_string()));
+    assert!(engine.exists(&BAG.to_string(), &"k".to_string()).unwrap());
 }
 
 #[test]
 fn crud_list_keys() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k1".to_string(), b"v").unwrap();
     engine.set(&BAG.to_string(), &"k2".to_string(), b"v").unwrap();
     engine.set(&BAG.to_string(), &"k3".to_string(), b"v").unwrap();
@@ -310,7 +310,7 @@ fn crud_list_keys() {
 
 #[test]
 fn crud_list_keys_excludes_deleted() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k1".to_string(), b"v").unwrap();
     engine.set(&BAG.to_string(), &"k2".to_string(), b"v").unwrap();
     engine.delete(&BAG.to_string(), &"k1".to_string()).unwrap();
@@ -321,7 +321,7 @@ fn crud_list_keys_excludes_deleted() {
 
 #[test]
 fn crud_multiple_bags_are_isolated() {
-    let (_dir, mut engine) = new_engine();
+    let (_dir, engine) = new_engine();
     engine.create_bag(&"a".to_string()).unwrap();
     engine.create_bag(&"b".to_string()).unwrap();
     engine.set(&"a".to_string(), &"k".to_string(), b"from-a").unwrap();
@@ -331,8 +331,8 @@ fn crud_multiple_bags_are_isolated() {
     assert_eq!(engine.get(&"b".to_string(), &"k".to_string()).unwrap(), b"from-b");
 
     engine.delete(&"a".to_string(), &"k".to_string()).unwrap();
-    assert!(!engine.exists(&"a".to_string(), &"k".to_string()));
-    assert!(engine.exists(&"b".to_string(), &"k".to_string()));
+    assert!(!engine.exists(&"a".to_string(), &"k".to_string()).unwrap());
+    assert!(engine.exists(&"b".to_string(), &"k".to_string()).unwrap());
 }
 
 
@@ -340,7 +340,7 @@ fn crud_multiple_bags_are_isolated() {
 
 #[test]
 fn edge_empty_value() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k".to_string(), b"").unwrap();
     let val = engine.get(&BAG.to_string(), &"k".to_string()).unwrap();
     assert_eq!(val, b"");
@@ -348,7 +348,7 @@ fn edge_empty_value() {
 
 #[test]
 fn edge_large_value() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     let large: Vec<u8> = (0..8192u16).map(|i| (i % 256) as u8).collect();
     engine.set(&BAG.to_string(), &"big".to_string(), &large).unwrap();
     let val = engine.get(&BAG.to_string(), &"big".to_string()).unwrap();
@@ -357,7 +357,7 @@ fn edge_large_value() {
 
 #[test]
 fn edge_all_byte_values_roundtrip() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     let all_bytes: Vec<u8> = (0u8..=255).collect();
     engine.set(&BAG.to_string(), &"bin".to_string(), &all_bytes).unwrap();
     let val = engine.get(&BAG.to_string(), &"bin".to_string()).unwrap();
@@ -366,17 +366,17 @@ fn edge_all_byte_values_roundtrip() {
 
 #[test]
 fn edge_unicode_key() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     let key = "こんにちは-🦀-Ünïcödé".to_string();
     engine.set(&BAG.to_string(), &key, b"value").unwrap();
     let val = engine.get(&BAG.to_string(), &key).unwrap();
     assert_eq!(val, b"value");
-    assert!(engine.exists(&BAG.to_string(), &key));
+    assert!(engine.exists(&BAG.to_string(), &key).unwrap());
 }
 
 #[test]
 fn edge_many_distinct_keys() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     for i in 0..50 {
         engine
             .set(&BAG.to_string(), &format!("key-{i}"), &[i as u8])
@@ -393,25 +393,25 @@ fn edge_many_distinct_keys() {
 
 #[test]
 fn persist_data_survives_reopen() {
-    let (dir, mut engine) = new_engine_with_bag(BAG);
+    let (dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k1".to_string(), b"v1").unwrap();
     engine.set(&BAG.to_string(), &"k2".to_string(), b"v2").unwrap();
     drop(engine);
 
-    let mut engine = reopen(&dir);
+    let engine = reopen(&dir);
     assert_eq!(engine.get(&BAG.to_string(), &"k1".to_string()).unwrap(), b"v1");
     assert_eq!(engine.get(&BAG.to_string(), &"k2".to_string()).unwrap(), b"v2");
 }
 
 #[test]
 fn persist_deletes_survive_reopen() {
-    let (dir, mut engine) = new_engine_with_bag(BAG);
+    let (dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k1".to_string(), b"v1").unwrap();
     engine.set(&BAG.to_string(), &"k2".to_string(), b"v2").unwrap();
     engine.delete(&BAG.to_string(), &"k1".to_string()).unwrap();
     drop(engine);
 
-    let mut engine = reopen(&dir);
+    let engine = reopen(&dir);
     assert!(matches!(
         engine.get(&BAG.to_string(), &"k1".to_string()),
         Err(EngineError::NoSuchEntryKeyError(_))
@@ -421,26 +421,26 @@ fn persist_deletes_survive_reopen() {
 
 #[test]
 fn persist_overwrites_survive_reopen_with_latest_value() {
-    let (dir, mut engine) = new_engine_with_bag(BAG);
+    let (dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k".to_string(), b"v1").unwrap();
     engine.set(&BAG.to_string(), &"k".to_string(), b"v2").unwrap();
     engine.set(&BAG.to_string(), &"k".to_string(), b"v3").unwrap();
     drop(engine);
 
-    let mut engine = reopen(&dir);
+    let engine = reopen(&dir);
     assert_eq!(engine.get(&BAG.to_string(), &"k".to_string()).unwrap(), b"v3");
     assert_eq!(engine.len_bag(&BAG.to_string()).unwrap(), 1);
 }
 
 #[test]
 fn persist_delete_then_reset_survives_reopen() {
-    let (dir, mut engine) = new_engine_with_bag(BAG);
+    let (dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k".to_string(), b"v1").unwrap();
     engine.delete(&BAG.to_string(), &"k".to_string()).unwrap();
     engine.set(&BAG.to_string(), &"k".to_string(), b"v2").unwrap();
     drop(engine);
 
-    let mut engine = reopen(&dir);
+    let engine = reopen(&dir);
     assert_eq!(engine.get(&BAG.to_string(), &"k".to_string()).unwrap(), b"v2");
 }
 
@@ -450,7 +450,7 @@ fn persist_empty_bag_survives_reopen() {
     drop(engine);
 
     let engine = reopen(&dir);
-    assert!(engine.list_bags().contains(&BAG.to_string()));
+    assert!(engine.list_bags().unwrap().contains(&BAG.to_string()));
     assert_eq!(engine.len_bag(&BAG.to_string()).unwrap(), 0);
 }
 
@@ -459,7 +459,7 @@ fn persist_empty_bag_survives_reopen() {
 
 #[test]
 fn ttl_entry_readable_before_expiry() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine
         .set_with_expiry(&BAG.to_string(), &"k".to_string(), b"val", 60_000)
         .unwrap();
@@ -470,7 +470,7 @@ fn ttl_entry_readable_before_expiry() {
 #[test]
 fn ttl_entry_expired_at_zero_ttl() {
     // TTL=0 means expiry = now, which is <= now on the next read.
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine
         .set_with_expiry(&BAG.to_string(), &"k".to_string(), b"val", 0)
         .unwrap();
@@ -480,7 +480,7 @@ fn ttl_entry_expired_at_zero_ttl() {
 
 #[test]
 fn ttl_on_non_expiring_entry_errors() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k".to_string(), b"v").unwrap();
     let result = engine.ttl(&BAG.to_string(), &"k".to_string());
     assert!(result.is_err());
@@ -488,7 +488,7 @@ fn ttl_on_non_expiring_entry_errors() {
 
 #[test]
 fn ttl_on_expiring_entry_returns_future_timestamp() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine
         .set_with_expiry(&BAG.to_string(), &"k".to_string(), b"v", 60_000)
         .unwrap();
@@ -499,7 +499,7 @@ fn ttl_on_expiring_entry_returns_future_timestamp() {
 #[test]
 fn ttl_persist_removes_expiry() {
     // persist() should re-write the entry without the TTL flag.
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine
         .set_with_expiry(&BAG.to_string(), &"k".to_string(), b"val", 60_000)
         .unwrap();
@@ -514,7 +514,7 @@ fn ttl_persist_removes_expiry() {
 #[test]
 fn ttl_regular_set_removes_expiry() {
     // Design spec: "Regular 'set' will remove expiry."
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine
         .set_with_expiry(&BAG.to_string(), &"k".to_string(), b"v1", 60_000)
         .unwrap();
@@ -528,13 +528,13 @@ fn ttl_regular_set_removes_expiry() {
 
 #[test]
 fn ttl_survives_reopen() {
-    let (dir, mut engine) = new_engine_with_bag(BAG);
+    let (dir, engine) = new_engine_with_bag(BAG);
     engine
         .set_with_expiry(&BAG.to_string(), &"k".to_string(), b"v", 60_000)
         .unwrap();
     drop(engine);
 
-    let mut engine = reopen(&dir);
+    let engine = reopen(&dir);
     let val = engine.get(&BAG.to_string(), &"k".to_string()).unwrap();
     assert_eq!(val, b"v");
     let expiry = engine.ttl(&BAG.to_string(), &"k".to_string()).unwrap();
@@ -543,7 +543,7 @@ fn ttl_survives_reopen() {
 
 #[test]
 fn ttl_expired_entry_removed_by_partial_compaction() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine
         .set_with_expiry(&BAG.to_string(), &"dead".to_string(), b"v", 0)
         .unwrap();
@@ -554,7 +554,7 @@ fn ttl_expired_entry_removed_by_partial_compaction() {
         result.1.unwrap();
     }
     // Expired key should be gone
-    assert!(!engine.exists(&BAG.to_string(), &"dead".to_string()));
+    assert!(!engine.exists(&BAG.to_string(), &"dead".to_string()).unwrap());
     // Live key must survive
     assert_eq!(
         engine.get(&BAG.to_string(), &"live".to_string()).unwrap(),
@@ -565,14 +565,14 @@ fn ttl_expired_entry_removed_by_partial_compaction() {
 #[test]
 fn ttl_persist_then_reopen() {
     // After persist() the entry should survive reopen without an expiry.
-    let (dir, mut engine) = new_engine_with_bag(BAG);
+    let (dir, engine) = new_engine_with_bag(BAG);
     engine
         .set_with_expiry(&BAG.to_string(), &"k".to_string(), b"persistent", 60_000)
         .unwrap();
     engine.persist(&BAG.to_string(), &"k".to_string()).unwrap();
     drop(engine);
 
-    let mut engine = reopen(&dir);
+    let engine = reopen(&dir);
     assert_eq!(
         engine.get(&BAG.to_string(), &"k".to_string()).unwrap(),
         b"persistent"
@@ -585,7 +585,7 @@ fn ttl_persist_then_reopen() {
 
 #[test]
 fn batch_set_many_and_get_many() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     let pairs = vec![
         KVPair { key: "k1".to_string(), value: b"v1".to_vec() },
         KVPair { key: "k2".to_string(), value: b"v2".to_vec() },
@@ -608,7 +608,7 @@ fn batch_set_many_and_get_many() {
 #[test]
 fn batch_get_many_ignores_missing_keys() {
     // Design: missing keys in batch ops are silently skipped, not errors.
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k1".to_string(), b"v1").unwrap();
 
     let k1 = "k1".to_string();
@@ -620,41 +620,41 @@ fn batch_get_many_ignores_missing_keys() {
 
 #[test]
 fn batch_delete_many_ignores_missing_keys() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k1".to_string(), b"v1").unwrap();
     engine.set(&BAG.to_string(), &"k2".to_string(), b"v2").unwrap();
 
     let k1 = "k1".to_string();
     let ghost = "ghost".to_string();
     engine.delete_many(&BAG.to_string(), &[&k1, &ghost]).unwrap();
-    assert!(!engine.exists(&BAG.to_string(), &"k1".to_string()));
-    assert!(engine.exists(&BAG.to_string(), &"k2".to_string()));
+    assert!(!engine.exists(&BAG.to_string(), &"k1".to_string()).unwrap());
+    assert!(engine.exists(&BAG.to_string(), &"k2".to_string()).unwrap());
 }
 
 #[test]
 fn batch_set_many_empty_is_ok() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set_many(&BAG.to_string(), vec![]).unwrap();
     assert_eq!(engine.len_bag(&BAG.to_string()).unwrap(), 0);
 }
 
 #[test]
 fn batch_get_many_empty_returns_empty() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     let results = engine.get_many(&BAG.to_string(), &[]).unwrap();
     assert!(results.is_empty());
 }
 
 #[test]
 fn batch_delete_many_all_missing_is_ok() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     let ghost = "ghost".to_string();
     engine.delete_many(&BAG.to_string(), &[&ghost]).unwrap();
 }
 
 #[test]
 fn batch_set_many_persists_across_reopen() {
-    let (dir, mut engine) = new_engine_with_bag(BAG);
+    let (dir, engine) = new_engine_with_bag(BAG);
     engine
         .set_many(
             &BAG.to_string(),
@@ -666,7 +666,7 @@ fn batch_set_many_persists_across_reopen() {
         .unwrap();
     drop(engine);
 
-    let mut engine = reopen(&dir);
+    let engine = reopen(&dir);
     assert_eq!(engine.get(&BAG.to_string(), &"a".to_string()).unwrap(), b"1");
     assert_eq!(engine.get(&BAG.to_string(), &"b".to_string()).unwrap(), b"2");
 }
@@ -676,17 +676,17 @@ fn batch_set_many_persists_across_reopen() {
 
 #[test]
 fn atomic_get_or_set_on_missing_creates_entry() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     let val = engine
         .get_or_set(&BAG.to_string(), &"k".to_string(), b"default")
         .unwrap();
     assert_eq!(val, b"default");
-    assert!(engine.exists(&BAG.to_string(), &"k".to_string()));
+    assert!(engine.exists(&BAG.to_string(), &"k".to_string()).unwrap());
 }
 
 #[test]
 fn atomic_get_or_set_on_existing_returns_existing_without_overwriting() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k".to_string(), b"original").unwrap();
     let val = engine
         .get_or_set(&BAG.to_string(), &"k".to_string(), b"default")
@@ -700,7 +700,7 @@ fn atomic_get_or_set_on_existing_returns_existing_without_overwriting() {
 
 #[test]
 fn atomic_update_if_different_updates_when_value_differs() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k".to_string(), b"old").unwrap();
     engine
         .update_if_different(&BAG.to_string(), &"k".to_string(), b"new")
@@ -710,7 +710,7 @@ fn atomic_update_if_different_updates_when_value_differs() {
 
 #[test]
 fn atomic_update_if_different_no_write_when_same() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k".to_string(), b"same").unwrap();
     engine
         .update_if_different(&BAG.to_string(), &"k".to_string(), b"same")
@@ -723,18 +723,18 @@ fn atomic_update_if_different_no_write_when_same() {
 
 #[test]
 fn atomic_get_and_delete_returns_value_and_removes_key() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k".to_string(), b"v").unwrap();
     let val = engine
         .get_and_delete(&BAG.to_string(), &"k".to_string())
         .unwrap();
     assert_eq!(val, b"v");
-    assert!(!engine.exists(&BAG.to_string(), &"k".to_string()));
+    assert!(!engine.exists(&BAG.to_string(), &"k".to_string()).unwrap());
 }
 
 #[test]
 fn atomic_get_and_delete_on_missing_key_fails() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     let result = engine.get_and_delete(&BAG.to_string(), &"ghost".to_string());
     assert!(result.is_err());
 }
@@ -744,7 +744,7 @@ fn atomic_get_and_delete_on_missing_key_fails() {
 
 #[test]
 fn compact_active_preserves_all_live_keys() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     for i in 0..20u8 {
         engine
             .set(&BAG.to_string(), &format!("k{i}"), &[i])
@@ -760,7 +760,7 @@ fn compact_active_preserves_all_live_keys() {
 
 #[test]
 fn compact_active_deduplicates_overwritten_keys() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     for _ in 0..5 {
         engine.set(&BAG.to_string(), &"k".to_string(), b"noise").unwrap();
     }
@@ -775,18 +775,18 @@ fn compact_active_deduplicates_overwritten_keys() {
 #[test]
 fn compact_active_keeps_deleted_key_gone() {
     // Partial compaction keeps tombstones as safeguards; the key must remain absent.
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     engine.set(&BAG.to_string(), &"k".to_string(), b"v").unwrap();
     engine.delete(&BAG.to_string(), &"k".to_string()).unwrap();
     for (_, res) in engine.compact_active() {
         res.unwrap();
     }
-    assert!(!engine.exists(&BAG.to_string(), &"k".to_string()));
+    assert!(!engine.exists(&BAG.to_string(), &"k".to_string()).unwrap());
 }
 
 #[test]
 fn compact_active_result_survives_reopen() {
-    let (dir, mut engine) = new_engine_with_bag(BAG);
+    let (dir, engine) = new_engine_with_bag(BAG);
     for i in 0..10u8 {
         engine.set(&BAG.to_string(), &format!("k{i}"), &[i]).unwrap();
     }
@@ -801,7 +801,7 @@ fn compact_active_result_survives_reopen() {
     }
     drop(engine);
 
-    let mut engine = reopen(&dir);
+    let engine = reopen(&dir);
     for i in 0..5u8 {
         assert_eq!(
             engine.get(&BAG.to_string(), &format!("k{i}")).unwrap(),
@@ -818,7 +818,7 @@ fn compact_active_result_survives_reopen() {
 
 #[test]
 fn compact_active_empty_bag_is_ok() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     for (_, res) in engine.compact_active() {
         res.unwrap();
     }
@@ -829,7 +829,7 @@ fn compact_active_empty_bag_is_ok() {
 
 #[test]
 fn full_compaction_preserves_all_live_keys() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     for i in 0..20u8 {
         engine.set(&BAG.to_string(), &format!("k{i}"), &[i]).unwrap();
     }
@@ -843,7 +843,7 @@ fn full_compaction_preserves_all_live_keys() {
 
 #[test]
 fn full_compaction_removes_deleted_entries() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     for i in 0..10u8 {
         engine.set(&BAG.to_string(), &format!("k{i}"), &[i]).unwrap();
     }
@@ -854,7 +854,7 @@ fn full_compaction_removes_deleted_entries() {
         res.unwrap();
     }
     for i in 0..5u8 {
-        assert!(!engine.exists(&BAG.to_string(), &format!("k{i}")));
+        assert!(!engine.exists(&BAG.to_string(), &format!("k{i}")).unwrap());
     }
     for i in 5..10u8 {
         assert_eq!(
@@ -866,7 +866,7 @@ fn full_compaction_removes_deleted_entries() {
 
 #[test]
 fn full_compaction_result_survives_reopen() {
-    let (dir, mut engine) = new_engine_with_bag(BAG);
+    let (dir, engine) = new_engine_with_bag(BAG);
     for i in 0..20u8 {
         engine.set(&BAG.to_string(), &format!("k{i}"), &[i]).unwrap();
     }
@@ -878,9 +878,9 @@ fn full_compaction_result_survives_reopen() {
     }
     drop(engine);
 
-    let mut engine = reopen(&dir);
+    let engine = reopen(&dir);
     for i in 0..10u8 {
-        assert!(!engine.exists(&BAG.to_string(), &format!("k{i}")));
+        assert!(!engine.exists(&BAG.to_string(), &format!("k{i}")).unwrap());
     }
     for i in 10..20u8 {
         assert_eq!(
@@ -895,11 +895,11 @@ fn full_compaction_result_survives_reopen() {
 
 #[test]
 fn rotation_all_keys_readable_after_one_rotation() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
-    fill_to_rotations(&mut engine, BAG, 1);
+    let (_dir, engine) = new_engine_with_bag(BAG);
+    fill_to_rotations(&engine, BAG, 1);
     for i in 0..80 {
         assert!(
-            engine.exists(&BAG.to_string(), &format!("key-{i:05}")),
+            engine.exists(&BAG.to_string(), &format!("key-{i:05}")).unwrap(),
             "key-{i:05} missing after rotation"
         );
     }
@@ -907,11 +907,11 @@ fn rotation_all_keys_readable_after_one_rotation() {
 
 #[test]
 fn rotation_data_survives_reopen_after_one_rotation() {
-    let (dir, mut engine) = new_engine_with_bag(BAG);
-    fill_to_rotations(&mut engine, BAG, 1);
+    let (dir, engine) = new_engine_with_bag(BAG);
+    fill_to_rotations(&engine, BAG, 1);
     drop(engine);
 
-    let mut engine = reopen(&dir);
+    let engine = reopen(&dir);
     for i in 0..80 {
         let val = engine.get(&BAG.to_string(), &format!("key-{i:05}")).unwrap();
         assert_eq!(val, vec![0xABu8; 100]);
@@ -920,11 +920,11 @@ fn rotation_data_survives_reopen_after_one_rotation() {
 
 #[test]
 fn rotation_data_survives_reopen_after_two_rotations() {
-    let (dir, mut engine) = new_engine_with_bag(BAG);
-    fill_to_rotations(&mut engine, BAG, 2);
+    let (dir, engine) = new_engine_with_bag(BAG);
+    fill_to_rotations(&engine, BAG, 2);
     drop(engine);
 
-    let mut engine = reopen(&dir);
+    let engine = reopen(&dir);
     for i in 0..160 {
         let val = engine.get(&BAG.to_string(), &format!("key-{i:05}")).unwrap();
         assert_eq!(val, vec![0xABu8; 100]);
@@ -934,7 +934,7 @@ fn rotation_data_survives_reopen_after_two_rotations() {
 #[test]
 fn rotation_full_compaction_then_reopen() {
     // Write enough for two rotations, delete half, full compact, reopen, verify.
-    let (dir, mut engine) = new_engine_with_bag(BAG);
+    let (dir, engine) = new_engine_with_bag(BAG);
     let value = vec![0xCDu8; 100];
     // Write 160 entries → 2 rotations
     for i in 0..160 {
@@ -953,10 +953,10 @@ fn rotation_full_compaction_then_reopen() {
     }
     drop(engine);
 
-    let mut engine = reopen(&dir);
+    let engine = reopen(&dir);
     for i in 0..80 {
         assert!(
-            !engine.exists(&BAG.to_string(), &format!("key-{i:05}")),
+            !engine.exists(&BAG.to_string(), &format!("key-{i:05}")).unwrap(),
             "Deleted key-{i:05} still present after compaction+reopen"
         );
     }
@@ -970,8 +970,8 @@ fn rotation_full_compaction_then_reopen() {
 fn rotation_overwrite_across_files_returns_latest() {
     // Write enough to trigger a rotation, then overwrite every key.
     // The latest value must be returned regardless of which file it lives in.
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
-    fill_to_rotations(&mut engine, BAG, 1);
+    let (_dir, engine) = new_engine_with_bag(BAG);
+    fill_to_rotations(&engine, BAG, 1);
     // Overwrite all keys with a different value
     for i in 0..80 {
         engine
@@ -990,8 +990,8 @@ fn rotation_overwrite_across_files_returns_latest() {
 
 #[test]
 fn rotation_validate_after_full_compaction() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
-    fill_to_rotations(&mut engine, BAG, 2);
+    let (_dir, engine) = new_engine_with_bag(BAG);
+    fill_to_rotations(&engine, BAG, 2);
     for (_, res) in engine.full_compaction() {
         res.unwrap();
     }
@@ -1010,7 +1010,7 @@ fn validate_fresh_store_is_clean() {
 
 #[test]
 fn validate_after_crud_operations_is_clean() {
-    let (_dir, mut engine) = new_engine_with_bag(BAG);
+    let (_dir, engine) = new_engine_with_bag(BAG);
     for i in 0..20u8 {
         engine.set(&BAG.to_string(), &format!("k{i}"), &[i]).unwrap();
     }
@@ -1023,7 +1023,7 @@ fn validate_after_crud_operations_is_clean() {
 
 #[test]
 fn validate_after_reopen_is_clean() {
-    let (dir, mut engine) = new_engine_with_bag(BAG);
+    let (dir, engine) = new_engine_with_bag(BAG);
     for i in 0..10u8 {
         engine.set(&BAG.to_string(), &format!("k{i}"), &[i]).unwrap();
     }
@@ -1035,7 +1035,7 @@ fn validate_after_reopen_is_clean() {
 
 #[test]
 fn validate_multi_bag_store_is_clean() {
-    let (_dir, mut engine) = new_engine();
+    let (_dir, engine) = new_engine();
     for b in ["bag-1", "bag-2", "bag-3"] {
         engine.create_bag(&b.to_string()).unwrap();
         engine.set(&b.to_string(), &"k".to_string(), b"v").unwrap();
