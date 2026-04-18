@@ -38,9 +38,25 @@ pub fn validate(engine: &BarKVEngine) -> Vec<ValidationFailure> {
 
     let dummy_headers = BagStoreFileHeaders::for_init(0);
 
+    let store = match engine.store.read() {
+        Ok(s) => s,
+        Err(_) => {
+            failures.push(ValidationFailure::root(ValidationError::LockPoisoned));
+            return failures;
+        },
+    };
+
             // Bag validations.
-    for (bag_key, bag) in &engine.store.bags {
-        let bag_file_chain = match upkeep::get_bag_file_chain(bag) {
+    for (bag_key, bag_arc) in &store.bags {
+        let bag = match bag_arc.lock() {
+            Ok(b) => b,
+            Err(_) => {
+                failures.push(ValidationFailure::bag(bag_key.clone(), ValidationError::LockPoisoned));
+                return failures;
+            },
+        };
+
+        let bag_file_chain = match upkeep::get_bag_file_chain(&bag) {
             Ok(c) => c,
             Err(e) => {
                 failures.push(ValidationFailure::bag(bag_key.clone(), ValidationError::Engine(e)));
@@ -106,4 +122,6 @@ pub enum ValidationError {
     Encoding(#[from] EncodingError),
     #[error("Wrapped io error: {0}")]
     IO(#[from] std::io::Error),
+    #[error("Lock poisoned")]
+    LockPoisoned,
 }
