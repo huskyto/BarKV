@@ -2,6 +2,11 @@
 use std::fs;
 use std::io::Error;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::RwLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -27,92 +32,65 @@ pub(crate) const STORE_FILENAME: &str = "barkv.store";
 const MIN_LOCK_SIZE: usize = 10_000;        // TODO move to config
 
 pub struct BarKVEngine {
-    pub(super) store: StoreArchive,
-    pub(super) root_path: PathBuf         // This should be a folder
+    pub(super) store: RwLock<StoreArchive>,
+    pub(super) root_path: PathBuf,
+    closed: AtomicBool,
 }
 
 impl BarKVEngine {
 
             // VALUES //
 
-    pub fn get(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<Vec<u8>, EngineError> {
-        let bag = self.store.bags.get_mut(bag_key)
-                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
-        let entry = bag.entries.get(key)
-                .ok_or_else(|| EngineError::NoSuchEntryKeyError(key.to_string()))?;
-
-        let read_chunk = if entry.file == bag.active_path {
-            io::read_chunk(&mut bag.file_handle, entry.offset, entry.size)?
-        } else {
-            let mut file_handle = io::open_file_for_read(&entry.file)?;
-            io::read_chunk(&mut file_handle, entry.offset, entry.size)?
-        };
-        let value = encoding::get_value_from_entry_data(&read_chunk)?;
-
-        Ok(value)
+    pub async fn get(&self, bag_key: &BagKey, key: &EntryKey) -> Result<Vec<u8>, EngineError> {
+        self.check_open()?;
+        self.with_bag(bag_key, |bag| {
+            Self::retrieve_value(key, bag)
+        })
     }
 
-    pub fn set(&mut self, bag_key: &BagKey, key: &EntryKey, value: &[u8]) -> Result<(), EngineError> {
-        let bag = self.store.bags.get_mut(bag_key)
-                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
-
-        let od_in_entry = ODIntermediateEntry::make_update(key.into(), value.to_vec());
-        let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
-        let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
-
-        let im_entry = IMEntry {
-            key: key.into(),
-            file: bag.active_path.clone(),
-            offset,
-            size: encoded_entry.len() as u64,
-        };
-
-        bag.entries.insert(key.clone(), im_entry);
-
-        let new_size = offset as usize + encoded_entry.len();
+    pub async fn set(&self, bag_key: &BagKey, key: &EntryKey, value: &[u8]) -> Result<(), EngineError> {
+        self.check_open()?;
+        let new_size = self.with_bag(bag_key, |bag| {
+            Self::insert_value(bag, key, value)
+        })?;
+    
         self.lock_if_needed(bag_key, new_size)?;
-
         Ok(())
     }
-
-    pub fn delete(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<(), EngineError> {
-        let bag = self.store.bags.get_mut(bag_key)
-                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
+    
+    pub async fn delete(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<(), EngineError> {
+        self.check_open()?;
+        let new_size = self.with_bag(bag_key, |bag| {
+            Self::remove_value(key, bag)
+        })?;
         
-        if !bag.entries.contains_key(key) {
-            return Err(EngineError::NoSuchEntryKeyError(key.to_string()));
-        }
-
-        let od_in_entry = ODIntermediateEntry::make_tombstone(key.into());
-        let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
-        let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
-
-        bag.entries.remove(key);
-
-        let new_size = offset as usize + encoded_entry.len();
         self.lock_if_needed(bag_key, new_size)?;
-
         Ok(())
     }
 
-    pub fn exists(&self, bag_key: &BagKey, key: &EntryKey) -> bool {
-        self.store.bags.get(bag_key)
-                .is_some_and(|bag| bag.entries.contains_key(key))
+    pub async fn exists(&self, bag_key: &BagKey, key: &EntryKey) -> Result<bool, EngineError> {
+        self.check_open()?;
+        self.with_bag(bag_key, |bag| {
+            Ok(bag.entries.contains_key(key))
+        })
     }
 
-    pub fn list_keys(&self, bag_key: &BagKey) -> Result<Vec<EntryKey>, EngineError> {
-        let bag = self.store.bags.get(bag_key)
-                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
-        let keys = bag.entries.keys().cloned().collect();
-
-        Ok(keys)
+    pub async fn list_keys(&self, bag_key: &BagKey) -> Result<Vec<EntryKey>, EngineError> {
+        self.check_open()?;
+        self.with_bag(bag_key, |bag| {
+            let keys = bag.entries.keys().cloned().collect();
+            Ok(keys)
+        })
     }
 
 
             // BAGS //
 
-    pub fn create_bag(&mut self, bag_key: &BagKey) -> Result<(), EngineError> {
-        if self.store.bags.contains_key(bag_key) {
+    pub async fn create_bag(&mut self, bag_key: &BagKey) -> Result<(), EngineError> {
+        self.check_open()?;
+        let mut store = self.store.write().map_err(|_| EngineError::LockPoisoned)?;
+
+        if store.bags.contains_key(bag_key) {
             return Err(EngineError::BagAlreadyExistsError(bag_key.clone()))
         }
 
@@ -138,27 +116,32 @@ impl BarKVEngine {
             current_file_id: 0,
         };
 
-        self.store.bags.insert(bag_key.clone(), new_bag);
+        let bag_arc = Arc::new(Mutex::new(new_bag));
+        store.bags.insert(bag_key.clone(), bag_arc);
 
                 // Update the store file.
-        let encoded_store = encoding::encode_store_file(&self.store)?;
+        let encoded_store = encoding::encode_store_file(&store)?;
         io::overwrite(&self.get_store_file_path(), &encoded_store)?;
 
         Ok(())
     }
 
-    pub fn drop_bag(&mut self, bag_key: &BagKey) -> Result<(), EngineError> {
-        let bag = match self.store.bags.remove(bag_key) {
+    pub async fn drop_bag(&mut self, bag_key: &BagKey) -> Result<(), EngineError> {
+        self.check_open()?;
+        let mut store = self.store.write().map_err(|_| EngineError::LockPoisoned)?;
+
+        let bag_arc = match store.bags.remove(bag_key) {
             Some(b) => b,
             None => return Err(EngineError::NoSuchBagKeyError(bag_key.clone())),
         };
 
 
-        let encoded_store = encoding::encode_store_file(&self.store)?;
+        let encoded_store = encoding::encode_store_file(&store)?;
         io::overwrite(&self.get_store_file_path(), &encoded_store)?;
 
                 // Remove bag files
-        let bag_files = upkeep::get_bag_file_chain(&bag)?;
+        let bag_lock = bag_arc.lock().map_err(|_| EngineError::LockPoisoned)?;
+        let bag_files = upkeep::get_bag_file_chain(&bag_lock)?;
         for file in bag_files {
             fs::remove_file(file)?;
         }
@@ -166,17 +149,19 @@ impl BarKVEngine {
         Ok(())
     }
 
-    pub fn len_bag(&self, bag_key: &BagKey) -> Result<usize, EngineError> {
-        let bag = self.store.bags.get(bag_key)
-                .ok_or(EngineError::NoSuchBagKeyError(bag_key.clone()))?;
-
-        Ok(bag.entries.len())
+    pub async fn len_bag(&self, bag_key: &BagKey) -> Result<usize, EngineError> {
+        self.check_open()?;
+        self.with_bag(bag_key, |bag| {
+            Ok(bag.entries.len())
+        })
     }
 
-    pub fn list_bags(&self) -> Vec<BagKey> {
-        self.store.bags.values()
-                .map(|b| b.key.clone())
-                .collect()
+    pub async fn list_bags(&self) -> Result<Vec<BagKey>, EngineError> {
+        self.check_open()?;
+        let store = self.store.read().map_err(|_| EngineError::LockPoisoned)?;
+        Ok(store.bags.keys()
+                .cloned()
+                .collect())
     }
 
 
@@ -200,12 +185,13 @@ impl BarKVEngine {
 
         for bag_root in bag_roots {
             let rebuilt_bag = upkeep::rebuild_bag_history(&bag_root)?;
-            bags.insert(bag_root.key.clone(), rebuilt_bag);
+            bags.insert(bag_root.key.clone(), Arc::new(Mutex::new(rebuilt_bag)));
         }
 
         let engine = BarKVEngine {
-            store: StoreArchive { bags },
+            store: RwLock::new(StoreArchive { bags }),
             root_path: path,
+            closed: AtomicBool::new(false),
         };
 
         Ok(engine)
@@ -225,14 +211,20 @@ impl BarKVEngine {
         let mut root_file = io::create_file_to_append(&root_file_path)?;
 
         let res = BarKVEngine {
-            store: StoreArchive {
+            store: RwLock::new(StoreArchive {
                 bags: HashMap::new(),
-            },
+            }),
             root_path: path,
+            closed: AtomicBool::new(false),
         };
 
-        let init_data = encoding::encode_store_file(&res.store)?;
-        io::write_all(&mut root_file, &init_data)?;
+        if let Ok(store) = &res.store.read() {
+            let init_data = encoding::encode_store_file(store)?;
+            io::write_all(&mut root_file, &init_data)?;
+        }
+        else {
+            return Err(EngineError::LockPoisoned);
+        }
 
         Ok(res)
     }
@@ -249,28 +241,66 @@ impl BarKVEngine {
         }
     }
 
-    pub fn close(&mut self) -> Result<(), EngineError> {
-        for bag in self.store.bags.values_mut() {
-            io::close_file(&mut bag.file_handle)?;
+    pub async fn close(&mut self) -> Result<(), EngineError> {
+        self.check_open()?;
+        let bag_keys: Vec<BagKey> = {
+            let store = self.store.read().map_err(|_| EngineError::LockPoisoned)?;
+            store.bags.keys().cloned().collect()
+        };
+        for bag_key in bag_keys {
+            self.with_bag(&bag_key, |bag| {
+                io::close_file(&mut bag.file_handle)?;
+                Ok(())
+            })?;
         }
 
         Ok(())
     }
 
-    pub fn compact_active(&mut self) -> Vec<(BagKey, Result<(), EngineError>)> {
-        self.store.bags.iter_mut()
-                .map(|(key, bag)| {
-                    (key.clone(), upkeep::compact_partial(bag, None).map(|_| ()))
-                })
-                .collect()
+    pub async fn compact_active(&mut self) -> Vec<(BagKey, Result<(), EngineError>)> {
+        if let Err(e) = self.check_open() {
+            return vec![("".to_string(), Err(e))];
+        }
+
+        let bag_keys: Vec<BagKey> = {
+            let store = match self.store.read() {
+                Ok(s) => s,
+                Err(_) => return vec![("".to_string(), Err(EngineError::LockPoisoned))],
+            };
+            store.bags.keys().cloned().collect()
+        };
+        let mut res = Vec::new();
+        for bag_key in bag_keys {
+            let _ = self.with_bag(&bag_key, |bag| {
+                res.push((bag_key.clone(), upkeep::compact_partial(bag, None).map(|_| ())));
+                Ok(())
+            });
+        }
+
+        res
     }
 
-    pub fn full_compaction(&mut self) -> Vec<(BagKey, Result<(), EngineError>)>  {
-        self.store.bags.iter_mut()
-                .map(|(key, bag)| {
-                    (key.clone(), upkeep::full_compaction(bag, &self.root_path).map(|_| ()))
-                })
-                .collect()
+    pub async fn full_compaction(&mut self) -> Vec<(BagKey, Result<(), EngineError>)>  {
+        if let Err(e) = self.check_open() {
+            return vec![("".to_string(), Err(e))];
+        }
+
+        let bag_keys: Vec<BagKey> = {
+            let store = match self.store.read() {
+                Ok(s) => s,
+                Err(_) => return vec![("".to_string(), Err(EngineError::LockPoisoned))],
+            };
+            store.bags.keys().cloned().collect()
+        };
+        let mut res = Vec::new();
+        for bag_key in bag_keys {
+            let _ = self.with_bag(&bag_key, |bag| {
+                res.push((bag_key.clone(), upkeep::full_compaction(bag, &self.root_path).map(|_| ())));
+                Ok(())
+            });
+        }
+
+        res
     }
 
 
@@ -278,43 +308,171 @@ impl BarKVEngine {
             
             // TODO Make these actually atomic once concurrency is added.
     
-    pub fn get_or_set(&mut self, bag_key: &BagKey, key: &EntryKey, value: &[u8]) -> Result<Vec<u8>, EngineError> {
-        if self.exists(bag_key, key) {
-            self.get(bag_key, key)
-        } else {
-            self.set(bag_key, key, value)?;
-            Ok(value.to_vec())
-        }
+    pub async fn get_or_set(&mut self, bag_key: &BagKey, key: &EntryKey, value: &[u8]) -> Result<Vec<u8>, EngineError> {
+        self.check_open()?;
+        self.with_bag(bag_key, |bag| {
+            if bag.entries.contains_key(key) {
+                Self::retrieve_value(key, bag)
+            } else {
+                let new_size = self.with_bag(bag_key, |bag| {
+                    Self::insert_value(bag, key, value)
+                })?;
+            
+                self.lock_if_needed(bag_key, new_size)?;
+                Ok(value.to_vec())
+            }
+        })
     }
 
-    pub fn update_if_different(&mut self, bag_key: &BagKey, key: &EntryKey, value: &[u8]) -> Result<(), EngineError> {
-        let current = self.get(bag_key, key)?;
-        if current != value {
-            self.set(bag_key, key, value)?;
-        }
-        Ok(())
+    pub async fn update_if_different(&mut self, bag_key: &BagKey, key: &EntryKey, value: &[u8]) -> Result<(), EngineError> {
+        self.check_open()?;
+        self.with_bag(bag_key, |bag| {
+            if bag.entries.contains_key(key) {
+                let current_value = Self::retrieve_value(key, bag)?;
+                if current_value != value {
+                    let new_size = self.with_bag(bag_key, |bag| {
+                        Self::insert_value(bag, key, value)
+                    })?;
+                
+                    self.lock_if_needed(bag_key, new_size)?;
+                }
+            }
+            else {
+                return Err(EngineError::NoSuchEntryKeyError(key.clone()));
+            }
+
+            Ok(())
+        })
     }
 
-    pub fn get_and_delete(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<Vec<u8>, EngineError> {
-        let value = self.get(bag_key, key)?;
-        self.delete(bag_key, key)?;
-        Ok(value)
+    pub async fn get_and_delete(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<Vec<u8>, EngineError> {
+        self.check_open()?;
+        self.with_bag(bag_key, |bag| {
+            if bag.entries.contains_key(key) {
+                let value = Self::retrieve_value(key, bag)?;
+
+                let new_size = self.with_bag(bag_key, |bag| {
+                    Self::remove_value(key, bag)
+                })?;                
+                self.lock_if_needed(bag_key, new_size)?;
+
+                Ok(value)
+            }
+            else {
+                Err(EngineError::NoSuchEntryKeyError(key.clone()))
+            }
+        })
     }
 
 
             // BATCH OPS //
 
-    pub fn get_many(&mut self, bag_key: &BagKey, keys: &[&EntryKey]) -> Result<Vec<KVPair>, EngineError> {
-        let bag = self.store.bags.get_mut(bag_key)
-                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
+    pub async fn get_many(&mut self, bag_key: &BagKey, keys: &[&EntryKey]) -> Result<Vec<KVPair>, EngineError> {
+        self.check_open()?;
+        self.with_bag(bag_key, |bag| {
+            let mut res = Vec::new();
 
-        let mut res = Vec::new();
+            for &key in keys {
+                if !bag.entries.contains_key(key) { continue }
 
-        for &key in keys {
-            let entry = match bag.entries.get(key) {
-                Some(ime) => ime,
-                None => continue,
+                let value = Self::retrieve_value(key, bag)?;
+
+                res.push(KVPair { key: key.into(), value });
+            }
+
+            Ok(res)
+        })
+    }
+
+    pub async fn set_many(&mut self, bag_key: &BagKey, pairs: Vec<KVPair>) -> Result<(), EngineError> {
+        self.check_open()?;
+        self.with_bag(bag_key, |bag| {
+            let mut new_size = 0;
+
+            for pair in pairs {
+                new_size = Self::insert_value(bag, &pair.key, &pair.value)?;
+            }
+
+            self.lock_if_needed(bag_key, new_size)?;
+
+            Ok(())
+        })
+    }
+
+    pub async fn delete_many(&mut self, bag_key: &BagKey, keys: &[&EntryKey]) -> Result<(), EngineError> {
+        self.check_open()?;
+        self.with_bag(bag_key, |bag| {
+            let mut new_size = 0;
+
+            for &key in keys {
+                if !bag.entries.contains_key(key) { continue }
+        
+                new_size = Self::remove_value(key, bag)?;
+            }
+
+            self.lock_if_needed(bag_key, new_size)?;
+
+            Ok(())
+        })
+    }
+
+
+            // TTL
+    
+    pub async fn set_with_expiry(&mut self, bag_key: &BagKey, key: &EntryKey,
+                value: &[u8], ttl: u128) -> Result<(), EngineError> {
+        self.check_open()?;
+        self.with_bag(bag_key, |bag| {
+            let expiry = util::current_timestamp() + ttl;
+            let od_in_entry = ODIntermediateEntry::make_expiring(key.into(), value.to_vec(), expiry);
+            let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
+            let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
+
+            let im_entry = IMEntry {
+                key: key.into(),
+                file: bag.active_path.clone(),
+                offset,
+                size: encoded_entry.len() as u64,
             };
+
+            bag.entries.insert(key.clone(), im_entry);
+
+            let new_size = offset as usize + encoded_entry.len();
+            self.lock_if_needed(bag_key, new_size)?;
+
+            Ok(())
+        })
+    }
+
+    pub async fn ttl(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<u128, EngineError> {
+        self.check_open()?;
+        self.with_bag(bag_key, |bag| {
+            let entry = bag.entries.get(key)
+                    .ok_or_else(|| EngineError::NoSuchEntryKeyError(key.to_string()))?;
+
+            let header_size = encoding::KV_ENTRY_HEADER_BASE_SIZE + 8;
+            if entry.size < header_size as u64 {
+                return Err(EncodingError::SizeMismatch(SizeMismatchType::OnDiskEntry))?
+            }
+
+            let read_chunk = if entry.file == bag.active_path {
+                let (offset, size) = (entry.offset, entry.size);
+                io::read_chunk(&mut bag.file_handle, offset, size)?
+            } else {
+                let mut file_handle = io::open_file_for_read(&entry.file)?;
+                io::read_chunk(&mut file_handle, entry.offset, entry.size)?
+            };        
+            let expiry = encoding::get_expiry_entry_data(&read_chunk)?;
+
+            Ok(expiry)
+        })
+    }
+
+    pub async fn persist(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<(), EngineError> {
+        self.check_open()?;
+        self.with_bag(bag_key, |bag| {
+            let entry = bag.entries.get(key)
+                    .ok_or_else(|| EngineError::NoSuchEntryKeyError(key.to_string()))?;
 
             let read_chunk = if entry.file == bag.active_path {
                 io::read_chunk(&mut bag.file_handle, entry.offset, entry.size)?
@@ -324,164 +482,65 @@ impl BarKVEngine {
             };
             let value = encoding::get_value_from_entry_data(&read_chunk)?;
 
-            res.push(KVPair { key: key.into(), value });
-        }
-
-        Ok(res)
-    }
-
-    pub fn set_many(&mut self, bag_key: &BagKey, pairs: Vec<KVPair>) -> Result<(), EngineError> {
-        let bag = self.store.bags.get_mut(bag_key)
-                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
-
-        let mut new_size = 0;
-
-        for pair in pairs {
-            let key = pair.key.clone();
-
-            let od_in_entry = ODIntermediateEntry::make_update(key.clone(), pair.value);
+            let od_in_entry = ODIntermediateEntry::make_update(key.into(), value);
             let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
             let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
 
             let im_entry = IMEntry {
-                key: key.clone(),
+                key: key.into(),
                 file: bag.active_path.clone(),
                 offset,
                 size: encoded_entry.len() as u64,
             };
 
-            bag.entries.insert(key, im_entry);
+            bag.entries.insert(key.clone(), im_entry);
 
-            new_size = offset as usize + encoded_entry.len();
-        }
+            let new_size = offset as usize + encoded_entry.len();
+            self.lock_if_needed(bag_key, new_size)?;
 
-        self.lock_if_needed(bag_key, new_size)?;
-
-        Ok(())
-    }
-
-    pub fn delete_many(&mut self, bag_key: &BagKey, keys: &[&EntryKey]) -> Result<(), EngineError> {
-        let bag = self.store.bags.get_mut(bag_key)
-                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
-
-        let mut new_size = 0;
-
-        for &key in keys {
-            if !bag.entries.contains_key(key) {
-                continue;
-            }
-    
-            let od_in_entry = ODIntermediateEntry::make_tombstone(key.into());
-            let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
-            let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
-    
-            bag.entries.remove(key);
-
-            new_size = offset as usize + encoded_entry.len();
-        }
-
-        self.lock_if_needed(bag_key, new_size)?;
-
-        Ok(())
-    }
-
-
-            // TTL
-    
-    pub fn set_with_expiry(&mut self, bag_key: &BagKey, key: &EntryKey, value: &[u8], ttl: u128) -> Result<(), EngineError>{
-        let bag = self.store.bags.get_mut(bag_key)
-                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
-
-        let expiry = util::current_timestamp() + ttl;
-        let od_in_entry = ODIntermediateEntry::make_expiring(key.into(), value.to_vec(), expiry);
-        let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
-        let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
-
-        let im_entry = IMEntry {
-            key: key.into(),
-            file: bag.active_path.clone(),
-            offset,
-            size: encoded_entry.len() as u64,
-        };
-
-        bag.entries.insert(key.clone(), im_entry);
-
-        let new_size = offset as usize + encoded_entry.len();
-        self.lock_if_needed(bag_key, new_size)?;
-
-        Ok(())
-    }
-
-    pub fn ttl(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<u128, EngineError> {
-        let bag = self.store.bags.get_mut(bag_key)
-                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
-        let entry = bag.entries.get(key)
-                .ok_or_else(|| EngineError::NoSuchEntryKeyError(key.to_string()))?;
-
-        let header_size = encoding::KV_ENTRY_HEADER_BASE_SIZE + 8;
-        if entry.size < header_size as u64 {
-            return Err(EncodingError::SizeMismatch(SizeMismatchType::OnDiskEntry))?
-        }
-
-        let read_chunk = if entry.file == bag.active_path {
-            io::read_chunk(&mut bag.file_handle, entry.offset, entry.size)?
-        } else {
-            let mut file_handle = io::open_file_for_read(&entry.file)?;
-            io::read_chunk(&mut file_handle, entry.offset, entry.size)?
-        };        
-        let expiry = encoding::get_expiry_entry_data(&read_chunk)?;
-
-        Ok(expiry)
-    }
-
-    pub fn persist(&mut self, bag_key: &BagKey, key: &EntryKey) -> Result<(), EngineError> {
-        let bag = self.store.bags.get_mut(bag_key)
-                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
-        let entry = bag.entries.get(key)
-                .ok_or_else(|| EngineError::NoSuchEntryKeyError(key.to_string()))?;
-
-        let read_chunk = if entry.file == bag.active_path {
-            io::read_chunk(&mut bag.file_handle, entry.offset, entry.size)?
-        } else {
-            let mut file_handle = io::open_file_for_read(&entry.file)?;
-            io::read_chunk(&mut file_handle, entry.offset, entry.size)?
-        };
-        let value = encoding::get_value_from_entry_data(&read_chunk)?;
-
-        let od_in_entry = ODIntermediateEntry::make_update(key.into(), value);
-        let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
-        let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
-
-        let im_entry = IMEntry {
-            key: key.into(),
-            file: bag.active_path.clone(),
-            offset,
-            size: encoded_entry.len() as u64,
-        };
-
-        bag.entries.insert(key.clone(), im_entry);
-
-        let new_size = offset as usize + encoded_entry.len();
-        self.lock_if_needed(bag_key, new_size)?;
-
-        Ok(())
+            Ok(())
+        })
     }
 
 
             // STATE // TODO Extension.
     
-    pub fn stats(&self) {
+    pub async fn stats(&self) {
         todo!()     // TODO Stats model
     }
 
-    pub fn validate(&self) -> Vec<ValidationFailure> {
+    pub async fn validate(&self) -> Vec<ValidationFailure> {
         validation::validate(self)
     }
 
 
             // INTERNAL //
 
-    fn lock_if_needed(&mut self, bag_key: &BagKey, new_size: usize) -> Result<(), EngineError> {
+    fn get_bag_arc(&self, bag_key: &BagKey) -> Result<Arc<Mutex<Bag>>, EngineError> {
+        let store = self.store.read().map_err(|_| EngineError::LockPoisoned)?;
+        Ok(store.bags.get(bag_key)
+                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?
+                .clone())
+    }
+
+    fn with_bag<T, F>(&self, bag_key: &BagKey, f: F) -> Result<T, EngineError>
+    where
+        F: FnOnce(&mut Bag) -> Result<T, EngineError>
+    {
+        let bag_arc = self.get_bag_arc(bag_key)?;
+        let mut bag = bag_arc.lock().map_err(|_| EngineError::LockPoisoned)?;
+        f(&mut bag)
+    }
+
+    fn check_open(&self) -> Result<(), EngineError> {
+        if self.closed.load(Ordering::Acquire) {
+            Err(EngineError::StoreClosed)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn lock_if_needed(&self, bag_key: &BagKey, new_size: usize) -> Result<(), EngineError> {
         if new_size >= MIN_LOCK_SIZE {
             self.lock_active(bag_key)
         } else { Ok(()) }
@@ -491,12 +550,12 @@ impl BarKVEngine {
         self.root_path.join(STORE_FILENAME)
     }
 
-    pub(super) fn lock_active(&mut self, bag_key: &BagKey) -> Result<(), EngineError> {
-        let bag = self.store.bags.get_mut(bag_key)
-                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?;
+    pub(super) fn lock_active(&self, bag_key: &BagKey) -> Result<(), EngineError> {
+        let bag_arc = self.get_bag_arc(bag_key)?;
+        let mut bag = bag_arc.lock().map_err(|_| EngineError::LockPoisoned)?;
 
         let updated_headers = BagStoreFileHeaders::for_locked(bag.current_file_id);
-        let offset_data = upkeep::compact_partial(bag, Some(updated_headers))?;
+        let offset_data = upkeep::compact_partial(&mut bag, Some(updated_headers))?;
 
                 // Create sealed helper file
         let next_file_path = upkeep::build_bag_path(&self.root_path,
@@ -518,7 +577,53 @@ impl BarKVEngine {
         Ok(())
     }
 
+    fn retrieve_value(key: &EntryKey, bag: &mut Bag) -> Result<Vec<u8>, EngineError> {
+        let entry = bag.entries.get(key)
+            .ok_or_else(|| EngineError::NoSuchEntryKeyError(key.to_string()))?;
+
+        let read_chunk = if entry.file == bag.active_path {
+            let (offset, size) = (entry.offset, entry.size);
+            io::read_chunk(&mut bag.file_handle, offset, size)?
+        } else {
+            let mut file_handle = io::open_file_for_read(&entry.file)?;
+            io::read_chunk(&mut file_handle, entry.offset, entry.size)?
+        };
+
+        encoding::get_value_from_entry_data(&read_chunk).map_err(EngineError::from)
+    }
+
+    fn insert_value(bag: &mut Bag, key: &EntryKey, value: &[u8]) -> Result<usize, EngineError> {
+        let od_in_entry = ODIntermediateEntry::make_update(key.into(), value.to_vec());
+        let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
+        let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
+
+        let im_entry = IMEntry {
+            key: key.into(),
+            file: bag.active_path.clone(),
+            offset,
+            size: encoded_entry.len() as u64,
+        };
+
+        bag.entries.insert(key.clone(), im_entry);
+        Ok(offset as usize + encoded_entry.len())
+    }
+
+    fn remove_value(key: &String, bag: &mut Bag) -> Result<usize, EngineError> {
+        if !bag.entries.contains_key(key) {
+            return Err(EngineError::NoSuchEntryKeyError(key.to_string()));
+        }
+
+        let od_in_entry = ODIntermediateEntry::make_tombstone(key.into());
+        let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
+        let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
+
+        bag.entries.remove(key);
+
+        Ok(offset as usize + encoded_entry.len())
+    }
+
 }
+
 
 
 #[derive(Debug, Error)]
@@ -541,6 +646,10 @@ pub enum EngineError {
     RootFileNotFound,
     #[error("Entry properties are inconsistent")]
     EntryConsistencyError,
+    #[error("Store is closed")]
+    StoreClosed,
+    #[error("A lock was poisoned")]
+    LockPoisoned,
 
     #[error("Wrapped encoding error: {0}")]
     WrappedEncodingError(#[from] EncodingError),

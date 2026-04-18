@@ -115,11 +115,13 @@ On store startup:
 
 ### Concurrency Model
 
-// TODO
+The bulk of the locking happens at the bag level, except for the few instances where the operations are on the bags themselves.
+
+A "closed" flag will be added to the store itself, so it will block any other operations, but will have time to complete existing operations before final shutdown happens. 
 
 ### Atomicity
 
-// TODO
+A small set of operations are provided to perform atomatic operations that will be executed in a single lock. See specifics below in Operations section.
 
 ## Data Model
 

@@ -508,8 +508,9 @@ pub fn encode_store_file(store: &StoreArchive) -> Result<Vec<u8>, EncodingError>
     data.extend_from_slice(&util::VERSION);
     data.extend_from_slice(&[0; 4]);      // Reserve for CRC.
 
-    for bag in store.bags.values() {
-        let encoded_bag = encode_bag_root(bag)?;
+    for bag_arc in store.bags.values() {
+        let bag = bag_arc.lock().map_err(|_| EncodingError::LockPoisoned)?;
+        let encoded_bag = encode_bag_root(&bag)?;
         data.extend_from_slice(&encoded_bag);
     }
 
@@ -642,6 +643,8 @@ pub enum EncodingError {
     IntoU16Failed,
     #[error("Failed to coherce value to u32")]
     IntoU32Failed,
+    #[error("A lock was poisoned")]
+    LockPoisoned,
 
     #[error("Failed to recreate UTF8 String")]
     StringDecodeError(#[from] FromUtf8Error)

@@ -3,6 +3,8 @@ use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::util;
 
@@ -11,7 +13,7 @@ pub type BagKey = String;
 
 
 pub struct StoreArchive {
-    pub bags: HashMap<BagKey, Bag>
+    pub bags: HashMap<BagKey, Arc<Mutex<Bag>>>
 }
 
 pub struct BagRootEntry {
