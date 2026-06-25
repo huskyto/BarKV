@@ -2,9 +2,9 @@
 use tempfile::TempDir;
 use std::time::SystemTime;
 
-use bar_kv::model::KVPair;
-use bar_kv::BarKV;
-use bar_kv::EngineError;
+use barkv::BarKV;
+use barkv::EngineError;
+use barkv::model::KVPair;
 
 use std::time::UNIX_EPOCH;
 

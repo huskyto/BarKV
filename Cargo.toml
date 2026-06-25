@@ -1,5 +1,5 @@
 [package]
-name = "bar_kv"
+name = "barkv"
 version = "0.1.0"
 edition = "2024"
 
