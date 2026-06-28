@@ -9,6 +9,8 @@ use std::io::Write;
 use std::io::SeekFrom;
 use std::path::Path;
 
+    // TODO make configurable.
+const READ_ALLOC_CAP: u64 = 1 << 20; // 1 MiB.
 
 pub fn read_all_file(file: &mut File) -> Result<Vec<u8>, Error> {
     let mut buffer = Vec::new();
@@ -27,7 +29,7 @@ pub fn read_file_contents(path: &Path) -> Result<Vec<u8>, Error> {
 
 pub fn read_chunk(file: &mut File, offset: u64, size: u64) -> Result<Vec<u8>, Error> {
     file.seek(SeekFrom::Start(offset))?;
-    let mut chunk_buffer = Vec::with_capacity(size as usize);
+    let mut chunk_buffer = Vec::with_capacity(size.min(READ_ALLOC_CAP) as usize);
     file.take(size).read_to_end(&mut chunk_buffer)?;
 
     Ok(chunk_buffer)
