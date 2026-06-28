@@ -8,6 +8,7 @@ use crate::encoding::EncodingError;
 use crate::engine::EngineError;
 use crate::engine::BarKVEngine;
 use crate::model::BagKey;
+use crate::model::BuiltRes;
 use crate::model::EntryKey;
 use crate::model::BagStoreFileHeaders;
 
@@ -87,9 +88,17 @@ pub fn validate(engine: &BarKVEngine) -> Vec<ValidationFailure> {
                     failures.push(ValidationFailure::bag(bag_key.clone(), ValidationError::Encoding(e)));
                 }
             }
-            else if let Err(e) = encoding::decode_bag_store_file(&bag_file_data) {
-                failures.push(ValidationFailure::bag(bag_key.clone(), ValidationError::Encoding(e)));
-            }
+            else {match encoding::decode_bag_store_file(&bag_file_data) {
+                Ok(br) => match br {
+                    BuiltRes::Clean(_) => { },
+                    BuiltRes::Dirty(_, errors) => {
+                        for ee in errors {
+                            failures.push(ValidationFailure::bag(bag_key.clone(), ValidationError::Encoding(ee)));
+                        }
+                    },
+                },
+                Err(ee) => failures.push(ValidationFailure::bag(bag_key.clone(), ValidationError::Encoding(ee))),
+            }}
         }
 
     }

@@ -1,6 +1,6 @@
 
-use bar_kv::engine::BarKVEngine;
-use bar_kv::engine::EngineError;
+use barkv::BarKV;
+use barkv::EngineError;
 
 
 fn main() -> Result<(), EngineError> {

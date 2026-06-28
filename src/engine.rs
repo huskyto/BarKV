@@ -12,7 +12,6 @@ use thiserror::Error;
 
 use crate::io;
 use crate::util;
-use crate::model::BagStoreFileHeaders;
 use crate::upkeep;
 use crate::encoding;
 use crate::encoding::EncodingError;
@@ -22,7 +21,9 @@ use crate::model::KVPair;
 use crate::model::BagKey;
 use crate::model::IMEntry;
 use crate::model::EntryKey;
+use crate::model::BuiltRes;
 use crate::model::StoreArchive;
+use crate::model::BagStoreFileHeaders;
 use crate::model::ODIntermediateEntry;
 use crate::validation;
 use crate::validation::ValidationFailure;
@@ -184,7 +185,20 @@ impl BarKVEngine {
         let mut bags = HashMap::new();
 
         for bag_root in bag_roots {
-            let rebuilt_bag = upkeep::rebuild_bag_history(&bag_root)?;
+            let rebuilt_bag = match upkeep::rebuild_bag_history(&bag_root)? {
+                BuiltRes::Clean(b) => b,
+                BuiltRes::Dirty(mut bag, errors) => {
+                    for e in errors {
+                        if let EngineError::WrappedEncodingError(EncodingError::TruncatedFile(size)) = e {
+                            io::close_file(&mut bag.file_handle)?;
+                            io::truncate_file_to(&bag.active_path, size)?;
+                            bag.file_handle = io::open_file_to_append(&bag.active_path)?;
+                        }
+                    };
+
+                    bag
+                },
+            };
             bags.insert(bag_root.key.clone(), Arc::new(Mutex::new(rebuilt_bag)));
         }
 

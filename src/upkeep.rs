@@ -7,6 +7,7 @@ use crate::io;
 use crate::model::IMEntry;
 use crate::model::EntryKey;
 use crate::model::FileInfo;
+use crate::model::BuiltRes;
 use crate::model::BagRootEntry;
 use crate::model::SealHelperFile;
 use crate::model::BagStoreFileHeaders;
@@ -35,7 +36,7 @@ pub(super) fn build_bag_path(store_root_path: &Path, bag_key: &BagKey, file_id: 
 
         // REPLAY //
 
-pub(super) fn rebuild_bag_history(bag_root: &BagRootEntry) -> Result<Bag, EngineError> {
+pub(super) fn rebuild_bag_history(bag_root: &BagRootEntry) -> Result<BuiltRes<Bag, EngineError>, EngineError> {
     let root_file_path = PathBuf::from(&bag_root.root_path);
 
     let mut next_file = Some(root_file_path.clone());
@@ -43,6 +44,8 @@ pub(super) fn rebuild_bag_history(bag_root: &BagRootEntry) -> Result<Bag, Engine
 
     let mut active_path = root_file_path.clone();
     let mut current_id = 0;
+
+    let mut errors: Vec<EngineError> = Vec::new();
 
     while let Some(next_path) = &next_file {
         active_path = next_path.clone();
@@ -61,7 +64,13 @@ pub(super) fn rebuild_bag_history(bag_root: &BagRootEntry) -> Result<Bag, Engine
         }
         else {
             let data = io::read_all_file(&mut file_handle)?;
-            encoding::decode_bag_store_file(&data)?
+            match encoding::decode_bag_store_file(&data)? {
+                BuiltRes::Clean(data) => data,
+                BuiltRes::Dirty(data, es) => {
+                    for e in es { errors.push(e.into()); }
+                    data
+                },
+            }
         };
 
         for entry in decode_data.rebuild_data {
@@ -89,7 +98,12 @@ pub(super) fn rebuild_bag_history(bag_root: &BagRootEntry) -> Result<Bag, Engine
         current_file_id: current_id,
     };
 
-    Ok(bag)
+    if errors.is_empty() {
+        Ok(BuiltRes::Clean(bag))
+    }
+    else {
+        Ok(BuiltRes::Dirty(bag, errors))
+    }
 }
 
 
@@ -266,7 +280,7 @@ pub(super) fn get_bag_file_chain(bag: &Bag) -> Result<Vec<PathBuf>, EngineError>
     res.push(bag.root_path.clone());
     let mut root_file = io::open_file_for_read(&bag.root_path)?;
     let data = io::read_chunk(&mut root_file, 0, encoding::STORE_FILE_HEADER_SIZE as u64)?;
-    let decoded = encoding::decode_bag_store_file(&data)?;
+    let decoded = encoding::decode_bag_store_file(&data)?.data();
     let mut next_file = if decoded.headers.is_sealed {
         Some(get_sealed_file_path(&bag.root_path))
     } else { None };
@@ -282,7 +296,7 @@ pub(super) fn get_bag_file_chain(bag: &Bag) -> Result<Vec<PathBuf>, EngineError>
         }
         else {
             let data = io::read_chunk(&mut file_handle, 0, encoding::STORE_FILE_HEADER_SIZE as u64)?;
-            let decoded = encoding::decode_bag_store_file(&data)?;
+            let decoded = encoding::decode_bag_store_file(&data)?.data();
             next_file = if decoded.headers.is_sealed {
                 Some(get_sealed_file_path(next))
             } else { None };

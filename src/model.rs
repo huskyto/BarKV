@@ -221,3 +221,18 @@ impl FileInfo {
     }
 }
 
+
+pub enum BuiltRes<T, E> {
+    Clean(T),
+    Dirty(T, Vec<E>)
+}
+
+impl<T, E> BuiltRes<T, E> {
+    pub fn data(self) -> T {
+        match self {
+            BuiltRes::Clean(d)
+                | BuiltRes::Dirty(d, _) => d,
+        }
+    }
+}
+

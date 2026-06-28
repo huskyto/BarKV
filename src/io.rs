@@ -94,6 +94,16 @@ pub fn open_file_to_append(path: &Path) -> Result<File, Error> {
             .open(path)
 }
 
+pub fn truncate_file_to(path: &Path, size: usize) -> Result<(), Error> {
+    let mut file = OpenOptions::new()
+            .write(true)
+            .open(path)?;
+    file.set_len(size as u64)?;
+    file.flush()?;
+    file.sync_data()?;
+    Ok(())
+}
+
 pub fn close_file(file: &mut File) -> Result<(), Error> {
     file.flush()?;
     file.unlock()?;

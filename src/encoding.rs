@@ -6,6 +6,7 @@ use thiserror::Error;
 
 use crate::util;
 use crate::model::Bag;
+use crate::model::BuiltRes;
 use crate::model::BagRootEntry;
 use crate::model::StoreArchive;
 use crate::model::SealHelperFile;
@@ -88,7 +89,13 @@ fn decode_bag_root_entry(data: &[u8]) -> Result<(BagRootEntry, usize), EncodingE
     Ok((entry, expected_size))
 }
 
-pub fn decode_bag_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingError> {
+enum EntryRes {
+    Valid(BaseEntryRebuildData),
+    Skip(usize,EncodingError),
+    Truncated,
+}
+
+pub fn decode_bag_store_file(data: &[u8]) -> Result<BuiltRes<BagStoreFileData, EncodingError>, EncodingError> {
     if data.len() < STORE_FILE_HEADER_SIZE {
         return Err(EncodingError::SizeMismatch(SizeMismatchType::StoreFile))
     }
@@ -103,7 +110,7 @@ pub fn decode_bag_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingEr
     let file_id = u16::from_be_bytes(file_id_data);
 
     if is_sealed {
-        return Ok(BagStoreFileData {
+        return Ok(BuiltRes::Clean(BagStoreFileData {
             headers: BagStoreFileHeaders {
                 is_sealed,
                 is_locked,
@@ -112,19 +119,40 @@ pub fn decode_bag_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingEr
             },
             rebuild_data: Vec::new(),
             next_file: None
-        });
+        }));
     }
 
     let mut rebuild_entries = Vec::new();
     let mut head = STORE_FILE_HEADER_SIZE;
+    let mut errors = Vec::new();
     while head < data.len() {
-        let rebuild_data = decode_entry_rebuild_data(&data[head..])?;
-        let offset = head as u64;
-        head += rebuild_data.size as usize;
-        rebuild_entries.push(rebuild_data.with_offset(offset));
+        let entry_res = match decode_entry_rebuild_data(&data[head..]) {
+            Ok(entry) => EntryRes::Valid(entry),
+            Err(EncodingError::SizeMismatch(_)) => EntryRes::Truncated,
+            Err(error) => match decode_entry_size(&data[head..]) {
+                Ok(size) => EntryRes::Skip(size, error),
+                Err(_) => EntryRes::Truncated,
+            },
+        };
+
+        match entry_res {
+            EntryRes::Valid(entry) => {
+                let size: usize = entry.size as usize;
+                rebuild_entries.push(entry.with_offset(head as u64));
+                head += size;
+            }
+            EntryRes::Skip(size, error) => {
+                errors.push(error);
+                head += size;
+            }
+            EntryRes::Truncated => {
+                errors.push(EncodingError::TruncatedFile(head));
+                break;
+            }
+        }
     }
 
-    Ok(BagStoreFileData {
+    let store_file_data = BagStoreFileData {
         headers: BagStoreFileHeaders {
             is_sealed,
             is_locked,
@@ -133,7 +161,14 @@ pub fn decode_bag_store_file(data: &[u8]) -> Result<BagStoreFileData, EncodingEr
         },
         rebuild_data: rebuild_entries,
         next_file: None,
-    })
+    };
+
+    if errors.is_empty() {
+        Ok(BuiltRes::Clean(store_file_data))
+    }
+    else {
+        Ok(BuiltRes::Dirty(store_file_data, errors))
+    }
 }
 
 pub fn decode_bag_store_file_header(data: &[u8]) -> Result<BagStoreFileHeaders, EncodingError> {
@@ -250,6 +285,34 @@ fn decode_entry_rebuild_data(data: &[u8]) -> Result<BaseEntryRebuildData, Encodi
     };
 
     Ok(data)
+}
+
+fn decode_entry_size(data: &[u8]) -> Result<usize, EncodingError> {
+    if data.len() < KV_ENTRY_HEADER_BASE_SIZE {
+        return Err(EncodingError::SizeMismatch(SizeMismatchType::OnDiskEntry))
+    }
+
+    let flags = data[12];
+    let has_expiry = (flags & 0b0000_0010) != 0;
+
+    let expiry_offset = if has_expiry { 16 } else { 0 };
+
+    let key_size_bytes: [u8; 4] = data[13..17].try_into()
+            .map_err(|_| EncodingError::SliceCohersionError)?;
+    let key_size = u32::from_be_bytes(key_size_bytes);
+
+    let val_size_bytes: [u8; 8] = data[17..25].try_into()
+            .map_err(|_| EncodingError::SliceCohersionError)?;
+    let value_size = u64::from_be_bytes(val_size_bytes);
+
+    let expected_size = (KV_ENTRY_HEADER_BASE_SIZE as u64 + expiry_offset + key_size as u64)
+            .checked_add(value_size)
+            .ok_or(EncodingError::SizeMismatch(SizeMismatchType::OnDiskEntry))?;
+
+    let expected_size_usize = usize::try_from(expected_size)
+        .map_err(|_| EncodingError::SizeMismatch(SizeMismatchType::OnDiskEntry))?;
+
+    Ok(expected_size_usize)
 }
 
 pub fn get_value_from_entry_data(data: &[u8]) -> Result<Vec<u8>, EncodingError> {
@@ -645,6 +708,8 @@ pub enum EncodingError {
     IntoU32Failed,
     #[error("A lock was poisoned")]
     LockPoisoned,
+    #[error("Store file was truncated. Valid ending at: {0}")]
+    TruncatedFile(usize),
 
     #[error("Failed to recreate UTF8 String")]
     StringDecodeError(#[from] FromUtf8Error)
