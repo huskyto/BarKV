@@ -39,22 +39,16 @@ pub fn validate(engine: &BarKVEngine) -> Vec<ValidationFailure> {
 
     let dummy_headers = BagStoreFileHeaders::for_init(0);
 
-    let store = match engine.store.read() {
-        Ok(s) => s,
-        Err(_) => {
-            failures.push(ValidationFailure::root(ValidationError::LockPoisoned));
-            return failures;
-        },
+    let Ok(store) = engine.store.read() else {
+        failures.push(ValidationFailure::root(ValidationError::LockPoisoned));
+        return failures;
     };
 
             // Bag validations.
     for (bag_key, bag_arc) in &store.bags {
-        let bag = match bag_arc.lock() {
-            Ok(b) => b,
-            Err(_) => {
-                failures.push(ValidationFailure::bag(bag_key.clone(), ValidationError::LockPoisoned));
-                return failures;
-            },
+        let Ok(bag) = bag_arc.lock() else {
+            failures.push(ValidationFailure::bag(bag_key.clone(), ValidationError::LockPoisoned));
+            return failures;
         };
 
         let bag_file_chain = match upkeep::get_bag_file_chain(&bag) {

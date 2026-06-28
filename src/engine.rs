@@ -131,9 +131,8 @@ impl BarKVEngine {
         self.check_open()?;
         let mut store = self.store.write().map_err(|_| EngineError::LockPoisoned)?;
 
-        let bag_arc = match store.bags.remove(bag_key) {
-            Some(b) => b,
-            None => return Err(EngineError::NoSuchBagKeyError(bag_key.clone())),
+        let Some(bag_arc) = store.bags.remove(bag_key) else {
+            return Err(EngineError::NoSuchBagKeyError(bag_key.clone()))
         };
 
 
@@ -274,13 +273,12 @@ impl BarKVEngine {
 
     pub fn compact_active(&self) -> Vec<(BagKey, Result<(), EngineError>)> {
         if let Err(e) = self.check_open() {
-            return vec![("".to_string(), Err(e))];
+            return vec![(String::new(), Err(e))];
         }
 
         let bag_keys: Vec<BagKey> = {
-            let store = match self.store.read() {
-                Ok(s) => s,
-                Err(_) => return vec![("".to_string(), Err(EngineError::LockPoisoned))],
+            let Ok(store) = self.store.read() else {
+                return vec![(String::new(), Err(EngineError::LockPoisoned))];
             };
             store.bags.keys().cloned().collect()
         };
@@ -297,13 +295,12 @@ impl BarKVEngine {
 
     pub fn full_compaction(&self) -> Vec<(BagKey, Result<(), EngineError>)>  {
         if let Err(e) = self.check_open() {
-            return vec![("".to_string(), Err(e))];
+            return vec![(String::new(), Err(e))];
         }
 
         let bag_keys: Vec<BagKey> = {
-            let store = match self.store.read() {
-                Ok(s) => s,
-                Err(_) => return vec![("".to_string(), Err(EngineError::LockPoisoned))],
+            let Ok(store) = self.store.read() else {
+                return vec![(String::new(), Err(EngineError::LockPoisoned))];
             };
             store.bags.keys().cloned().collect()
         };

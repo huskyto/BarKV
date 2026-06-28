@@ -48,7 +48,7 @@ pub(super) fn rebuild_bag_history(bag_root: &BagRootEntry) -> Result<BuiltRes<Ba
     let mut errors: Vec<EngineError> = Vec::new();
 
     while let Some(next_path) = &next_file {
-        active_path = next_path.clone();
+        active_path.clone_from(next_path);
         let mut file_handle = io::open_file_for_read(next_path)?;
 
         let header_data = io::read_chunk(&mut file_handle, 0, encoding::STORE_FILE_HEADER_SIZE as u64)?;
@@ -164,7 +164,7 @@ pub (super) fn full_compaction(bag: &mut Bag, store_root_path: &Path) -> Result<
         let data = io::read_file_contents(&file_path)?;
         let decode_data = encoding::decode_bag_store_file_int_entries(&data)?;
 
-        let file_info = FileInfo::from(&decode_data.headers, file_path.clone());
+        let file_info = FileInfo::from(&decode_data.headers, &file_path);
         file_infos.insert(decode_data.headers.file_id, file_info);
 
         for entry in decode_data.int_entries {

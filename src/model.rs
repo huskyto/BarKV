@@ -49,6 +49,7 @@ pub struct BaseEntryRebuildData {
     pub deleted: bool
 }
 impl BaseEntryRebuildData {
+    #[must_use]
     pub fn with_offset(self, offset: u64) -> OffsetEntryRebuildData {
         OffsetEntryRebuildData {
             key: self.key,
@@ -65,6 +66,7 @@ pub struct OffsetEntryRebuildData {
     pub deleted: bool,
 }
 impl OffsetEntryRebuildData {
+    #[must_use]
     pub fn to_im_entry(&self, file: &Path) -> IMEntry {
         IMEntry {
             key: self.key.clone(),
@@ -91,6 +93,7 @@ pub struct BagStoreFileHeaders {
     pub file_id: u16
 }
 impl BagStoreFileHeaders {
+    #[must_use]
     pub fn for_init(file_id: u16) -> Self {
         Self {
             is_sealed: false,
@@ -99,6 +102,7 @@ impl BagStoreFileHeaders {
             file_id
         }
     }
+    #[must_use]
     pub fn for_locked(file_id: u16) -> Self {
         Self {
             is_sealed: false,
@@ -107,6 +111,7 @@ impl BagStoreFileHeaders {
             file_id
         }
     }
+    #[must_use]
     pub fn for_sealed(file_id: u16) -> Self {
         Self {
             is_sealed: true,
@@ -115,6 +120,7 @@ impl BagStoreFileHeaders {
             file_id
         }
     }
+    #[must_use]
     pub fn from_flags_and_id(flags: u8, file_id: u16) -> Self {
         let is_deleted = (flags & 0b0000_0001) != 0;
         let is_sealed  = (flags & 0b0000_0010) != 0;
@@ -130,6 +136,7 @@ pub struct BagStoreFileData {
     pub next_file: Option<PathBuf>
 }
 impl BagStoreFileData {
+    #[must_use]
     pub fn for_init(file_id: u16) -> Self {
         Self {
             headers: BagStoreFileHeaders {
@@ -163,6 +170,7 @@ pub struct ODIntermediateEntry {
     pub timestamp: u64
 }
 impl ODIntermediateEntry {
+    #[must_use]
     pub fn make_tombstone(key: EntryKey) -> Self {
         Self {
             key,
@@ -172,6 +180,7 @@ impl ODIntermediateEntry {
             timestamp: util::current_timestamp_sec()
         }
     }
+    #[must_use]
     pub fn make_update(key: EntryKey, value: Vec<u8>) -> Self {
         Self {
             key,
@@ -181,6 +190,7 @@ impl ODIntermediateEntry {
             timestamp: util::current_timestamp_sec()
         }
     }
+    #[must_use]
     pub fn make_expiring(key: EntryKey, value: Vec<u8>, expiry: u128) -> Self {
         Self {
             key,
@@ -190,6 +200,7 @@ impl ODIntermediateEntry {
             timestamp: util::current_timestamp_sec()
         }
     }
+    #[must_use]
     pub fn to_tombstone(self) -> Self {
         Self {
             key: self.key,
@@ -211,7 +222,8 @@ pub struct FileInfo {
     pub is_sealed: bool
 }
 impl FileInfo {
-    pub fn from(headers: &BagStoreFileHeaders, path: PathBuf) -> Self {
+    #[must_use]
+    pub fn from(headers: &BagStoreFileHeaders, path: &PathBuf) -> Self {
         Self {
             filepath:  path.clone(),
             file_id:   headers.file_id,
