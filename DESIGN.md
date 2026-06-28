@@ -7,6 +7,8 @@ BarKV aims to be a solid implementation of a Key-Value Pair Store. Its design go
 
 BarKV takes inspiration from Bitcask, as a log-structured key-value store.
 
+---
+
 ## Design Decisions
 
 ### Bags/Namespaces
@@ -123,6 +125,8 @@ A "closed" flag will be added to the store itself, so it will block any other op
 
 A small set of operations are provided to perform atomatic operations that will be executed in a single lock. See specifics below in Operations section.
 
+---
+
 ## Data Model
 
 ### Store Archive File
@@ -232,6 +236,8 @@ Optional header size: 16 bytes;
 - key_size: u32
 - key: [u8]
 
+---
+
 ## Operations
 
 ### Values
@@ -287,6 +293,16 @@ Regular "set" will remove expiry.
 - stats()
 - validate()
 
+---
+
+## Testing
+
+BarKV is tested through its public API. Tests live in `tests/`, split into one file per operation group, with shared setup in `tests/common`.
+
+There are no in-source unit tests by design. The public API can already drive every internal path, including rotation, compaction, and TTL expiry. Testing through the public surface keeps the suite decoupled from internals, so refactors do not break it.
+
+---
+
 ## Roadmap
 
 ### TCP Server
@@ -305,21 +321,37 @@ Will allow for distributed instances with a negotiated source of truth.
 
 Use Reed-Solomon codes to repair corrupted entries, instead of only detecting them.
 
+
 ### Scripting/Batching
 
 Basic scripting to allow for multiple operations to be applied with a single library call.
+
 
 ### Bash commands
 
 Run api operations via bash calls.
 
+
 ### Types
 
 Use flags to store types values, instead of all being [u8].
 
+---
+
+## Implemented Roadmap
+
+Parts that were originally part of the Roadmap but have now been implemented.
+
+### Concurrency.
+
+Lock granularity to ensure correct and performant concurrent access and modification.
+
+
 ### Full compaction
 
 Will check all the store, including sealed files and compact everything into a new set of files.
+
+---
 
 ## Non-Goals
 
