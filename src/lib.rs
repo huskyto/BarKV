@@ -153,6 +153,10 @@ impl BarKV {
     }
 
     /// Returns the keys of all bags in the store.
+    ///
+    /// # Errors
+    ///
+    /// Returns:
     pub fn list_bags(&self) -> Result<Vec<BagKey>, EngineError> {
         self.engine.list_bags()
     }

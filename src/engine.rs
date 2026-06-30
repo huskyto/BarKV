@@ -420,7 +420,7 @@ impl BarKVEngine {
         let new_size = self.with_bag(bag_key, |bag| {
             let expiry = util::current_timestamp() + ttl;
             let od_in_entry = ODIntermediateEntry::make_expiring(key.into(), value.to_vec(), expiry);
-            let encoded_entry = encoding::encode_od_entry(&od_in_entry);
+            let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
             let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
 
             let im_entry = IMEntry {
@@ -432,7 +432,7 @@ impl BarKVEngine {
 
             bag.entries.insert(key.clone(), im_entry);
 
-            Ok(offset as usize + encoded_entry.len())
+            Ok(to_usize(offset)? + encoded_entry.len())
         })?;
 
         self.lock_if_needed(bag_key, new_size)?;
@@ -566,7 +566,7 @@ impl BarKVEngine {
 
     fn insert_value(bag: &mut Bag, key: &EntryKey, value: &[u8]) -> Result<usize, EngineError> {
         let od_in_entry = ODIntermediateEntry::make_update(key.into(), value.to_vec());
-        let encoded_entry = encoding::encode_od_entry(&od_in_entry);
+        let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
         let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
 
         let im_entry = IMEntry {
@@ -577,7 +577,7 @@ impl BarKVEngine {
         };
 
         bag.entries.insert(key.clone(), im_entry);
-        Ok(offset as usize + encoded_entry.len())
+        Ok(to_usize(offset)? + encoded_entry.len())
     }
 
     fn remove_value(key: &String, bag: &mut Bag) -> Result<usize, EngineError> {
@@ -586,16 +586,20 @@ impl BarKVEngine {
         }
 
         let od_in_entry = ODIntermediateEntry::make_tombstone(key.into());
-        let encoded_entry = encoding::encode_od_entry(&od_in_entry);
+        let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
         let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
 
         bag.entries.remove(key);
 
-        Ok(offset as usize + encoded_entry.len())
+        Ok(to_usize(offset)? + encoded_entry.len())
     }
 
 }
 
+
+fn to_usize(value: u64) -> Result<usize, EngineError> {
+    usize::try_from(value).map_err(|_| EngineError::IntoUsizeFailed)
+}
 
 
 #[derive(Debug, Error)]
@@ -622,6 +626,8 @@ pub enum EngineError {
     StoreClosed,
     #[error("A lock was poisoned")]
     LockPoisoned,
+    #[error("Failed to coherce value to usize")]
+    IntoUsizeFailed,
 
     #[error("Wrapped encoding error: {0}")]
     WrappedEncodingError(#[from] EncodingError),

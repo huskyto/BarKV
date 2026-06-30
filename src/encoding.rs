@@ -67,17 +67,17 @@ fn decode_bag_root_entry(data: &[u8]) -> Result<(BagRootEntry, usize), EncodingE
     let name_size = u16::from_be_bytes([data[0], data[1]]);
     let path_size = u16::from_be_bytes([data[2], data[3]]);
 
-    let expected_size = 4 + name_size as usize + path_size as usize;
+    let expected_size = 4 + usize::from(name_size) + usize::from(path_size);
     if data.len() < expected_size {
         return Err(EncodingError::SizeMismatch(SizeMismatchType::BagRootEntry))
     }
     
-    let name_bytes = &data[4..4 + name_size as usize];
+    let name_bytes = &data[4..4 + usize::from(name_size)];
     let name = String::from_utf8(name_bytes.to_vec())
             .map_err(EncodingError::StringDecodeError)?;
 
-    let path_offset = 4 + name_size as usize;
-    let path_bytes = &data[path_offset..path_offset + path_size as usize];
+    let path_offset = 4 + usize::from(name_size);
+    let path_bytes = &data[path_offset..path_offset + usize::from(path_size)];
     let path = String::from_utf8(path_bytes.to_vec())
             .map_err(EncodingError::StringDecodeError)?;
 
@@ -137,7 +137,7 @@ pub fn decode_bag_store_file(data: &[u8]) -> Result<BuiltRes<BagStoreFileData, E
 
         match entry_res {
             EntryRes::Valid(entry) => {
-                let size: usize = entry.size as usize;
+                let size: usize = to_usize(entry.size)?;
                 rebuild_entries.push(entry.with_offset(head as u64));
                 head += size;
             }
@@ -199,17 +199,17 @@ pub fn decode_seal_store_file(data: &[u8], base_headers: &BagStoreFileHeaders) -
     let nf_size_bytes = [data[4], data[5]];
     let nf_size = u16::from_be_bytes(nf_size_bytes);
 
-    if data.len() < header_size + nf_size as usize {
+    if data.len() < header_size + usize::from(nf_size) {
         return Err(EncodingError::SizeMismatch(SizeMismatchType::SealHelperFile))
     }
 
-    let nf_bytes = &data[header_size..header_size + nf_size as usize];
+    let nf_bytes = &data[header_size..header_size + usize::from(nf_size)];
     let next_file_str = String::from_utf8(nf_bytes.to_vec())
             .map_err(EncodingError::StringDecodeError)?;
     let next_file = PathBuf::from(next_file_str);
 
     let mut rebuild_entries = Vec::new();
-    let mut head = header_size + nf_size as usize;
+    let mut head = header_size + usize::from(nf_size);
     while head < data.len() {
         let (rebuild_data, offset) = decode_entry_rebuild_data_from_short_entry(&data[head..])?;
         head += offset;
@@ -273,7 +273,7 @@ fn decode_entry_rebuild_data(data: &[u8]) -> Result<BaseEntryRebuildData, Encodi
     //     }
     // }
     
-    let key_offset = 25 + expiry_offset as usize;
+    let key_offset = 25 + to_usize(expiry_offset)?;
     let key_bytes = &data[key_offset..key_offset + key_size as usize];
     let key = String::from_utf8(key_bytes.to_vec())
             .map_err(EncodingError::StringDecodeError)?;
@@ -368,8 +368,8 @@ pub fn get_value_from_entry_data(data: &[u8]) -> Result<Vec<u8>, EncodingError> 
         }
     }
     
-    let value_offset = 25 + expiry_offset as usize + key_size as usize;
-    let value_bytes = &data[value_offset..value_offset + value_size as usize];
+    let value_offset = 25 + to_usize(expiry_offset)? + key_size as usize;
+    let value_bytes = &data[value_offset..value_offset + to_usize(value_size)?];
 
     Ok(value_bytes.to_vec())
 }
@@ -487,13 +487,13 @@ fn decode_entry_to_intermediate(data: &[u8]) -> Result<(ODIntermediateEntry, usi
         }
     }
     
-    let key_offset = 25 + expiry_offset as usize;
+    let key_offset = 25 + to_usize(expiry_offset)?;
     let key_bytes = &data[key_offset..key_offset + key_size as usize];
     let key = String::from_utf8(key_bytes.to_vec())
             .map_err(EncodingError::StringDecodeError)?;
 
-    let value_offset = 25 + expiry_offset as usize + key_size as usize;
-    let value_bytes = &data[value_offset..value_offset + value_size as usize];
+    let value_offset = 25 + to_usize(expiry_offset)? + key_size as usize;
+    let value_bytes = &data[value_offset..value_offset + to_usize(value_size)?];
 
     let entry = ODIntermediateEntry {
         key,
@@ -534,8 +534,8 @@ pub fn get_expiry_entry_data(data: &[u8]) -> Result<u128, EncodingError> {
     Ok(expiry_u128)
 }
 
-pub fn encode_od_entry(entry: &ODIntermediateEntry) -> Vec<u8> {
-    let key_size = entry.key.len() as u32;
+pub fn encode_od_entry(entry: &ODIntermediateEntry) -> Result<Vec<u8>, EncodingError> {
+    let key_size = to_u32(entry.key.len())?;
     let val_size = entry.value.len() as u64;
     let has_expiry = entry.expiry.is_some();
     let flags = u8::from(entry.is_tombstone)
@@ -546,7 +546,7 @@ pub fn encode_od_entry(entry: &ODIntermediateEntry) -> Vec<u8> {
         entry_size += 16;
     }
 
-    let mut res = Vec::with_capacity(entry_size as usize);
+    let mut res = Vec::with_capacity(to_usize(entry_size)?);
 
     res.extend_from_slice(&[0; 4]); // reserve for CRC
     res.extend_from_slice(&timestamp.to_be_bytes());
@@ -562,7 +562,7 @@ pub fn encode_od_entry(entry: &ODIntermediateEntry) -> Vec<u8> {
     let crc = util::calculate_crc(&res[4..]);
     res[..4].copy_from_slice(&crc.to_be_bytes());
 
-    res
+    Ok(res)
 }
 
 pub fn encode_store_file(store: &StoreArchive) -> Result<Vec<u8>, EncodingError> {
@@ -593,7 +593,7 @@ fn encode_bag_root(bag: &Bag) -> Result<Vec<u8>, EncodingError> {
     let path_len: u16 = path.len().try_into()
             .map_err(|_| EncodingError::IntoU16Failed)?;
 
-    let mut data = Vec::with_capacity(4 + key_len as usize + path_len as usize);
+    let mut data = Vec::with_capacity(4 + usize::from(key_len) + usize::from(path_len));
     data.extend_from_slice(&key_len.to_be_bytes());
     data.extend_from_slice(&path_len.to_be_bytes());
     data.extend_from_slice(key.as_bytes());
@@ -614,14 +614,14 @@ pub fn encode_bag_store_file_header(headers: &BagStoreFileHeaders) -> Vec<u8> {
 }
 
 pub fn encode_bag_store_file_full(headers: &BagStoreFileHeaders, entries: &[ODIntermediateEntry])
-            -> (Vec<u8>, Vec<OffsetEntryRebuildData>) {
+            -> Result<(Vec<u8>, Vec<OffsetEntryRebuildData>), EncodingError> {
     let encoded_header = encode_bag_store_file_header(headers);
     let mut data = Vec::new();
     let mut offsets = Vec::new();
     let mut head = STORE_FILE_HEADER_SIZE;
     data.extend_from_slice(&encoded_header);
     for entry in entries {
-        let encoded_entry = encode_od_entry(entry);
+        let encoded_entry = encode_od_entry(entry)?;
         data.extend_from_slice(&encoded_entry);
         let offset_data = OffsetEntryRebuildData {
             key: entry.key.clone(),
@@ -633,7 +633,7 @@ pub fn encode_bag_store_file_full(headers: &BagStoreFileHeaders, entries: &[ODIn
         head += encoded_entry.len();
     }
 
-    (data, offsets)
+    Ok((data, offsets))
 }
 
 pub fn encode_seal_helper_file(seal_helper_data: &SealHelperFile) -> Result<Vec<u8>, EncodingError> {
@@ -675,6 +675,14 @@ fn encode_short_entry(entry: &OffsetEntryRebuildData) -> Result<Vec<u8>, Encodin
     Ok(data)
 }
 
+fn to_u32(value: usize) -> Result<u32, EncodingError> {
+    u32::try_from(value).map_err(|_| EncodingError::IntoU32Failed)
+}
+
+fn to_usize(value: u64) -> Result<usize, EncodingError> {
+    usize::try_from(value).map_err(|_| EncodingError::IntoUsizeFailed)
+}
+
 
 #[derive(Debug, Error)]
 pub enum EncodingError {
@@ -706,6 +714,8 @@ pub enum EncodingError {
     IntoU16Failed,
     #[error("Failed to coherce value to u32")]
     IntoU32Failed,
+    #[error("Failed to coherce value to usize")]
+    IntoUsizeFailed,
     #[error("A lock was poisoned")]
     LockPoisoned,
     #[error("Store file was truncated. Valid ending at: {0}")]
