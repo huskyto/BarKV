@@ -534,7 +534,7 @@ pub fn get_expiry_entry_data(data: &[u8]) -> Result<u128, EncodingError> {
     Ok(expiry_u128)
 }
 
-pub fn encode_od_entry(entry: &ODIntermediateEntry) -> Result<Vec<u8>, EncodingError> {
+pub fn encode_od_entry(entry: &ODIntermediateEntry) -> Vec<u8> {
     let key_size = entry.key.len() as u32;
     let val_size = entry.value.len() as u64;
     let has_expiry = entry.expiry.is_some();
@@ -562,7 +562,7 @@ pub fn encode_od_entry(entry: &ODIntermediateEntry) -> Result<Vec<u8>, EncodingE
     let crc = util::calculate_crc(&res[4..]);
     res[..4].copy_from_slice(&crc.to_be_bytes());
 
-    Ok(res)
+    res
 }
 
 pub fn encode_store_file(store: &StoreArchive) -> Result<Vec<u8>, EncodingError> {
@@ -602,7 +602,7 @@ fn encode_bag_root(bag: &Bag) -> Result<Vec<u8>, EncodingError> {
     Ok(data)
 }
 
-pub fn encode_bag_store_file_header(headers: &BagStoreFileHeaders) -> Result<Vec<u8>, EncodingError> {
+pub fn encode_bag_store_file_header(headers: &BagStoreFileHeaders) -> Vec<u8> {
     let mut data = Vec::new();
     let flags = u8::from(headers.is_deleted)
             | (u8::from(headers.is_sealed) << 1)
@@ -610,18 +610,18 @@ pub fn encode_bag_store_file_header(headers: &BagStoreFileHeaders) -> Result<Vec
 
     data.push(flags);
     data.extend_from_slice(&headers.file_id.to_be_bytes());
-    Ok(data)
+    data
 }
 
 pub fn encode_bag_store_file_full(headers: &BagStoreFileHeaders, entries: &[ODIntermediateEntry])
-            -> Result<(Vec<u8>, Vec<OffsetEntryRebuildData>), EncodingError> {
-    let encoded_header = encode_bag_store_file_header(headers)?;
+            -> (Vec<u8>, Vec<OffsetEntryRebuildData>) {
+    let encoded_header = encode_bag_store_file_header(headers);
     let mut data = Vec::new();
     let mut offsets = Vec::new();
     let mut head = STORE_FILE_HEADER_SIZE;
     data.extend_from_slice(&encoded_header);
     for entry in entries {
-        let encoded_entry = encode_od_entry(entry)?;
+        let encoded_entry = encode_od_entry(entry);
         data.extend_from_slice(&encoded_entry);
         let offset_data = OffsetEntryRebuildData {
             key: entry.key.clone(),
@@ -633,7 +633,7 @@ pub fn encode_bag_store_file_full(headers: &BagStoreFileHeaders, entries: &[ODIn
         head += encoded_entry.len();
     }
 
-    Ok((data, offsets))
+    (data, offsets)
 }
 
 pub fn encode_seal_helper_file(seal_helper_data: &SealHelperFile) -> Result<Vec<u8>, EncodingError> {

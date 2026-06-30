@@ -134,7 +134,7 @@ pub(super) fn compact_partial(bag: &mut Bag, updated_headers: Option<BagStoreFil
     let entries: Vec<ODIntermediateEntry> = entries_map.into_values().collect();
     let new_headers = updated_headers.unwrap_or(decode_data.headers);
     let (bag_store_data, offset_data) =
-            encoding::encode_bag_store_file_full(&new_headers, &entries)?;
+            encoding::encode_bag_store_file_full(&new_headers, &entries);
     io::overwrite(path, &bag_store_data)?;
 
             // Update IMEntries
@@ -226,7 +226,7 @@ pub (super) fn full_compaction(bag: &mut Bag, store_root_path: &Path) -> Result<
         else if file_info.is_locked {
             let new_headers = BagStoreFileHeaders::for_sealed(file_info.file_id);
             let (bag_store_data, offset_data) = 
-                    encoding::encode_bag_store_file_full(&new_headers, &file_entries)?;
+                    encoding::encode_bag_store_file_full(&new_headers, &file_entries);
 
                         // Update IMEntries
             offset_data.iter()
@@ -243,7 +243,7 @@ pub (super) fn full_compaction(bag: &mut Bag, store_root_path: &Path) -> Result<
         else {
             let new_headers = BagStoreFileHeaders::for_init(file_info.file_id);
             let (bag_store_data, offset_data) = 
-                    encoding::encode_bag_store_file_full(&new_headers, &file_entries)?;
+                    encoding::encode_bag_store_file_full(&new_headers, &file_entries);
 
                         // Update IMEntries
             offset_data.iter()

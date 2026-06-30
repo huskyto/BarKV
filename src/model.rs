@@ -75,6 +75,7 @@ impl OffsetEntryRebuildData {
             size: self.size,
         }
     }
+    #[must_use]
     pub fn from_im_entry(entry: &IMEntry) -> Self {
         Self {
             key: entry.key.clone(),
@@ -223,9 +224,9 @@ pub struct FileInfo {
 }
 impl FileInfo {
     #[must_use]
-    pub fn from(headers: &BagStoreFileHeaders, path: &PathBuf) -> Self {
+    pub fn from(headers: &BagStoreFileHeaders, path: &Path) -> Self {
         Self {
-            filepath:  path.clone(),
+            filepath:  path.to_path_buf(),
             file_id:   headers.file_id,
             is_locked: headers.is_locked,
             is_sealed: headers.is_sealed,

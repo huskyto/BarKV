@@ -105,7 +105,7 @@ impl BarKVEngine {
 
                 // Init bag store file with header
         let header_data = BagStoreFileHeaders::for_init(0);
-        let header = encoding::encode_bag_store_file_header(&header_data)?;
+        let header = encoding::encode_bag_store_file_header(&header_data);
         io::write_all(&mut file_handle, &header)?;
 
         let new_bag = Bag {
@@ -307,7 +307,7 @@ impl BarKVEngine {
         let mut res = Vec::new();
         for bag_key in bag_keys {
             let _ = self.with_bag(&bag_key, |bag| {
-                res.push((bag_key.clone(), upkeep::full_compaction(bag, &self.root_path).map(|_| ())));
+                res.push((bag_key.clone(), upkeep::full_compaction(bag, &self.root_path)));
                 Ok(())
             });
         }
@@ -337,10 +337,9 @@ impl BarKVEngine {
         self.check_open()?;
         let new_size = self.with_bag(bag_key, |bag| {
             let current_value = Self::retrieve_value(key, bag)?;
-            if current_value != value {
+            if current_value == value { Ok(None) } else {
                 Ok(Some(Self::insert_value(bag, key, value)?))
             }
-            else { Ok(None) }
         })?;
 
         if let Some(new_size) = new_size {
@@ -421,7 +420,7 @@ impl BarKVEngine {
         let new_size = self.with_bag(bag_key, |bag| {
             let expiry = util::current_timestamp() + ttl;
             let od_in_entry = ODIntermediateEntry::make_expiring(key.into(), value.to_vec(), expiry);
-            let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
+            let encoded_entry = encoding::encode_od_entry(&od_in_entry);
             let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
 
             let im_entry = IMEntry {
@@ -444,7 +443,7 @@ impl BarKVEngine {
         self.check_open()?;
         self.with_bag(bag_key, |bag| {
             let entry = bag.entries.get(key)
-                    .ok_or_else(|| EngineError::NoSuchEntryKeyError(key.to_string()))?;
+                    .ok_or_else(|| EngineError::NoSuchEntryKeyError(key.clone()))?;
 
             let header_size = encoding::KV_ENTRY_HEADER_BASE_SIZE + 8;
             if entry.size < header_size as u64 {
@@ -478,9 +477,9 @@ impl BarKVEngine {
 
             // STATE // TODO Extension.
     
-    pub fn stats(&self) {
-        todo!()     // TODO Stats model
-    }
+    // pub fn stats(&self) {
+    //     todo!()     // TODO Stats model
+    // }
 
     pub fn validate(&self) -> Vec<ValidationFailure> {
         validation::validate(self)
@@ -492,7 +491,7 @@ impl BarKVEngine {
     fn get_bag_arc(&self, bag_key: &BagKey) -> Result<Arc<Mutex<Bag>>, EngineError> {
         let store = self.store.read().map_err(|_| EngineError::LockPoisoned)?;
         Ok(store.bags.get(bag_key)
-                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.to_string()))?
+                .ok_or_else(|| EngineError::NoSuchBagKeyError(bag_key.clone()))?
                 .clone())
     }
 
@@ -542,7 +541,7 @@ impl BarKVEngine {
         bag.active_path = next_file_path;
 
         let header_data = BagStoreFileHeaders::for_init(bag.current_file_id);
-        let header = encoding::encode_bag_store_file_header(&header_data)?;
+        let header = encoding::encode_bag_store_file_header(&header_data);
         io::write_all(&mut next_file_handle, &header)?;
 
         bag.file_handle = next_file_handle;
@@ -552,7 +551,7 @@ impl BarKVEngine {
 
     fn retrieve_value(key: &EntryKey, bag: &mut Bag) -> Result<Vec<u8>, EngineError> {
         let entry = bag.entries.get(key)
-            .ok_or_else(|| EngineError::NoSuchEntryKeyError(key.to_string()))?;
+            .ok_or_else(|| EngineError::NoSuchEntryKeyError(key.clone()))?;
 
         let read_chunk = if entry.file == bag.active_path {
             let (offset, size) = (entry.offset, entry.size);
@@ -567,7 +566,7 @@ impl BarKVEngine {
 
     fn insert_value(bag: &mut Bag, key: &EntryKey, value: &[u8]) -> Result<usize, EngineError> {
         let od_in_entry = ODIntermediateEntry::make_update(key.into(), value.to_vec());
-        let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
+        let encoded_entry = encoding::encode_od_entry(&od_in_entry);
         let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
 
         let im_entry = IMEntry {
@@ -583,11 +582,11 @@ impl BarKVEngine {
 
     fn remove_value(key: &String, bag: &mut Bag) -> Result<usize, EngineError> {
         if !bag.entries.contains_key(key) {
-            return Err(EngineError::NoSuchEntryKeyError(key.to_string()));
+            return Err(EngineError::NoSuchEntryKeyError(key.clone()));
         }
 
         let od_in_entry = ODIntermediateEntry::make_tombstone(key.into());
-        let encoded_entry = encoding::encode_od_entry(&od_in_entry)?;
+        let encoded_entry = encoding::encode_od_entry(&od_in_entry);
         let offset = io::append(&mut bag.file_handle, &encoded_entry)?;
 
         bag.entries.remove(key);
