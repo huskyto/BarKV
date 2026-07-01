@@ -1,8 +1,4 @@
 
-use barkv::BarKV;
-use barkv::EngineError;
+fn main() {
 
-
-fn main() -> Result<(), EngineError> {
-    Ok(())
 }

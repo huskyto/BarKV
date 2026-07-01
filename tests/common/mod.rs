@@ -6,7 +6,6 @@ use std::time::UNIX_EPOCH;
 
 use barkv::BarKV;
 
-
 pub const BAG: &str = "test-bag";
 
 pub fn new_engine() -> (TempDir, BarKV) {

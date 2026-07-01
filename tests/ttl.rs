@@ -1,7 +1,6 @@
 mod common;
 use common::*;
 
-
 #[test]
 fn ttl_entry_readable_before_expiry() {
     let (_dir, engine) = new_engine_with_bag(BAG);
@@ -26,7 +25,9 @@ fn ttl_entry_expired_at_zero_ttl() {
 #[test]
 fn ttl_on_non_expiring_entry_errors() {
     let (_dir, engine) = new_engine_with_bag(BAG);
-    engine.set(&BAG.to_string(), &"k".to_string(), b"v").unwrap();
+    engine
+        .set(&BAG.to_string(), &"k".to_string(), b"v")
+        .unwrap();
     let result = engine.ttl(&BAG.to_string(), &"k".to_string());
     assert!(result.is_err());
 }
@@ -53,7 +54,10 @@ fn ttl_persist_removes_expiry() {
     // ttl() should now fail — no expiry on entry
     assert!(engine.ttl(&BAG.to_string(), &"k".to_string()).is_err());
     // value should still be readable
-    assert_eq!(engine.get(&BAG.to_string(), &"k".to_string()).unwrap(), b"val");
+    assert_eq!(
+        engine.get(&BAG.to_string(), &"k".to_string()).unwrap(),
+        b"val"
+    );
 }
 
 #[test]
@@ -63,7 +67,9 @@ fn ttl_regular_set_removes_expiry() {
     engine
         .set_with_expiry(&BAG.to_string(), &"k".to_string(), b"v1", 60_000)
         .unwrap();
-    engine.set(&BAG.to_string(), &"k".to_string(), b"v2").unwrap();
+    engine
+        .set(&BAG.to_string(), &"k".to_string(), b"v2")
+        .unwrap();
 
     let val = engine.get(&BAG.to_string(), &"k".to_string()).unwrap();
     assert_eq!(val, b"v2");
@@ -99,7 +105,11 @@ fn ttl_expired_entry_removed_by_partial_compaction() {
         result.1.unwrap();
     }
     // Expired key should be gone
-    assert!(!engine.exists(&BAG.to_string(), &"dead".to_string()).unwrap());
+    assert!(
+        !engine
+            .exists(&BAG.to_string(), &"dead".to_string())
+            .unwrap()
+    );
     // Live key must survive
     assert_eq!(
         engine.get(&BAG.to_string(), &"live".to_string()).unwrap(),

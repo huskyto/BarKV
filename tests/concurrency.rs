@@ -3,7 +3,6 @@ use common::*;
 
 use barkv::EngineError;
 
-
 #[test]
 fn concurrent_writes_distinct_keys_same_bag_all_persist() {
     let (_dir, engine) = new_engine_with_bag(BAG);
@@ -16,14 +15,21 @@ fn concurrent_writes_distinct_keys_same_bag_all_persist() {
             s.spawn(move || {
                 for i in 0..per_thread {
                     engine
-                        .set(&BAG.to_string(), &format!("t{t}-k{i}"), format!("t{t}-v{i}").as_bytes())
+                        .set(
+                            &BAG.to_string(),
+                            &format!("t{t}-k{i}"),
+                            format!("t{t}-v{i}").as_bytes(),
+                        )
                         .unwrap();
                 }
             });
         }
     });
 
-    assert_eq!(engine.len_bag(&BAG.to_string()).unwrap(), threads * per_thread);
+    assert_eq!(
+        engine.len_bag(&BAG.to_string()).unwrap(),
+        threads * per_thread
+    );
     for t in 0..threads {
         for i in 0..per_thread {
             assert_eq!(
@@ -51,7 +57,11 @@ fn concurrent_writes_distinct_bags() {
             s.spawn(move || {
                 for i in 0..per_bag {
                     engine
-                        .set(&format!("bag{b}"), &format!("k{i}"), format!("v{i}").as_bytes())
+                        .set(
+                            &format!("bag{b}"),
+                            &format!("k{i}"),
+                            format!("v{i}").as_bytes(),
+                        )
                         .unwrap();
                 }
             });
@@ -61,7 +71,11 @@ fn concurrent_writes_distinct_bags() {
     for b in 0..bags {
         assert_eq!(engine.len_bag(&format!("bag{b}")).unwrap(), per_bag);
     }
-    assert!(engine.validate().is_empty(), "validation failures: {:?}", engine.validate());
+    assert!(
+        engine.validate().is_empty(),
+        "validation failures: {:?}",
+        engine.validate()
+    );
 }
 
 #[test]
@@ -75,7 +89,11 @@ fn concurrent_get_or_set_same_key_single_winner() {
             .map(|t| {
                 s.spawn(move || {
                     engine
-                        .get_or_set(&BAG.to_string(), &"k".to_string(), format!("val-{t}").as_bytes())
+                        .get_or_set(
+                            &BAG.to_string(),
+                            &"k".to_string(),
+                            format!("val-{t}").as_bytes(),
+                        )
                         .unwrap()
                 })
             })
@@ -87,7 +105,10 @@ fn concurrent_get_or_set_same_key_single_winner() {
     // those that found the key already present — must observe that one value.
     let winner = engine.get(&BAG.to_string(), &"k".to_string()).unwrap();
     for r in &results {
-        assert_eq!(r, &winner, "get_or_set returned a value other than the single winner");
+        assert_eq!(
+            r, &winner,
+            "get_or_set returned a value other than the single winner"
+        );
     }
 }
 
@@ -117,7 +138,9 @@ fn concurrent_set_and_get_same_key_no_torn_read() {
     // Distinct, equal-length values: a torn read (wrong offset/length, or a value
     // read while a write is mid-flight) shows up as bytes outside this set.
     let values: Vec<Vec<u8>> = vec![b"AAAA".to_vec(), b"BBBB".to_vec(), b"CCCC".to_vec()];
-    engine.set(&BAG.to_string(), &"k".to_string(), &values[0]).unwrap();
+    engine
+        .set(&BAG.to_string(), &"k".to_string(), &values[0])
+        .unwrap();
 
     let engine = &engine;
     let values = &values;
@@ -127,7 +150,11 @@ fn concurrent_set_and_get_same_key_no_torn_read() {
         s.spawn(move || {
             for n in 0..5000 {
                 engine
-                    .set(&BAG.to_string(), &"k".to_string(), &values[n % values.len()])
+                    .set(
+                        &BAG.to_string(),
+                        &"k".to_string(),
+                        &values[n % values.len()],
+                    )
                     .unwrap();
             }
         });
@@ -169,26 +196,39 @@ fn concurrent_writes_with_rotation_stay_consistent() {
     }
 
     // No key lost or duplicated across rotations.
-    assert_eq!(engine.len_bag(&BAG.to_string()).unwrap(), threads * per_thread);
+    assert_eq!(
+        engine.len_bag(&BAG.to_string()).unwrap(),
+        threads * per_thread
+    );
     for t in 0..threads {
         for i in 0..per_thread {
             assert_eq!(
-                engine.get(&BAG.to_string(), &format!("t{t}-k{i:03}")).unwrap(),
+                engine
+                    .get(&BAG.to_string(), &format!("t{t}-k{i:03}"))
+                    .unwrap(),
                 value
             );
         }
     }
     let failures = engine.validate();
-    assert!(failures.is_empty(), "validation failures after concurrent rotation: {failures:?}");
+    assert!(
+        failures.is_empty(),
+        "validation failures after concurrent rotation: {failures:?}"
+    );
 
     // And the rotated, multi-file store rebuilds correctly.
     drop(engine);
     let engine = reopen(&dir);
-    assert_eq!(engine.len_bag(&BAG.to_string()).unwrap(), threads * per_thread);
+    assert_eq!(
+        engine.len_bag(&BAG.to_string()).unwrap(),
+        threads * per_thread
+    );
     for t in 0..threads {
         for i in 0..per_thread {
             assert_eq!(
-                engine.get(&BAG.to_string(), &format!("t{t}-k{i:03}")).unwrap(),
+                engine
+                    .get(&BAG.to_string(), &format!("t{t}-k{i:03}"))
+                    .unwrap(),
                 value
             );
         }
@@ -208,7 +248,11 @@ fn concurrent_writes_survive_reopen() {
                 s.spawn(move || {
                     for i in 0..per_thread {
                         engine
-                            .set(&BAG.to_string(), &format!("t{t}-k{i}"), format!("t{t}-v{i}").as_bytes())
+                            .set(
+                                &BAG.to_string(),
+                                &format!("t{t}-k{i}"),
+                                format!("t{t}-v{i}").as_bytes(),
+                            )
                             .unwrap();
                     }
                 });
@@ -218,7 +262,10 @@ fn concurrent_writes_survive_reopen() {
     drop(engine);
 
     let engine = reopen(&dir);
-    assert_eq!(engine.len_bag(&BAG.to_string()).unwrap(), threads * per_thread);
+    assert_eq!(
+        engine.len_bag(&BAG.to_string()).unwrap(),
+        threads * per_thread
+    );
     for t in 0..threads {
         for i in 0..per_thread {
             assert_eq!(

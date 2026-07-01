@@ -6,7 +6,6 @@ use tempfile::TempDir;
 use barkv::BarKV;
 use barkv::EngineError;
 
-
 #[test]
 fn lifecycle_create_then_open() {
     let dir = TempDir::new().unwrap();
@@ -52,20 +51,23 @@ fn lifecycle_open_on_invalid_path_fails() {
     assert!(result.is_err());
 }
 
-
 // ── Close ─────────────────────────────────────────────────────────────────────
 
 #[test]
 fn lifecycle_close_succeeds() {
     let (_dir, engine) = new_engine_with_bag(BAG);
-    engine.set(&BAG.to_string(), &"k".to_string(), b"v").unwrap();
+    engine
+        .set(&BAG.to_string(), &"k".to_string(), b"v")
+        .unwrap();
     assert!(engine.close().is_ok());
 }
 
 #[test]
 fn lifecycle_close_blocks_subsequent_ops() {
     let (_dir, engine) = new_engine_with_bag(BAG);
-    engine.set(&BAG.to_string(), &"k".to_string(), b"v").unwrap();
+    engine
+        .set(&BAG.to_string(), &"k".to_string(), b"v")
+        .unwrap();
     engine.close().unwrap();
 
     assert!(matches!(
@@ -102,11 +104,21 @@ fn lifecycle_close_twice_errors() {
 #[test]
 fn lifecycle_close_then_reopen_data_intact() {
     let (dir, engine) = new_engine_with_bag(BAG);
-    engine.set(&BAG.to_string(), &"k1".to_string(), b"v1").unwrap();
-    engine.set(&BAG.to_string(), &"k2".to_string(), b"v2").unwrap();
+    engine
+        .set(&BAG.to_string(), &"k1".to_string(), b"v1")
+        .unwrap();
+    engine
+        .set(&BAG.to_string(), &"k2".to_string(), b"v2")
+        .unwrap();
     engine.close().unwrap();
 
     let engine = reopen(&dir);
-    assert_eq!(engine.get(&BAG.to_string(), &"k1".to_string()).unwrap(), b"v1");
-    assert_eq!(engine.get(&BAG.to_string(), &"k2".to_string()).unwrap(), b"v2");
+    assert_eq!(
+        engine.get(&BAG.to_string(), &"k1".to_string()).unwrap(),
+        b"v1"
+    );
+    assert_eq!(
+        engine.get(&BAG.to_string(), &"k2".to_string()).unwrap(),
+        b"v2"
+    );
 }

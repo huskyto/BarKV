@@ -15,7 +15,6 @@ fn root_store_file(dir: &tempfile::TempDir) -> PathBuf {
     dir.path().join("barkv.store")
 }
 
-
 // ── Truncation / torn-write recovery ──────────────────────────────────────────
 // DESIGN.md "Error Recovery": "On truncated files, the store will regenerate all
 // the valid entries present in the log."
@@ -25,7 +24,11 @@ fn recovery_torn_trailing_write_recovers_committed_entries() {
     let (dir, engine) = new_engine_with_bag(BAG);
     for i in 0..5 {
         engine
-            .set(&BAG.to_string(), &format!("k{i}"), format!("v{i}").as_bytes())
+            .set(
+                &BAG.to_string(),
+                &format!("k{i}"),
+                format!("v{i}").as_bytes(),
+            )
             .unwrap();
     }
     drop(engine);
@@ -51,7 +54,11 @@ fn recovery_truncated_tail_recovers_earlier_entries() {
     let (dir, engine) = new_engine_with_bag(BAG);
     for i in 0..5 {
         engine
-            .set(&BAG.to_string(), &format!("k{i}"), format!("v{i}").as_bytes())
+            .set(
+                &BAG.to_string(),
+                &format!("k{i}"),
+                format!("v{i}").as_bytes(),
+            )
             .unwrap();
     }
     drop(engine);
@@ -76,7 +83,6 @@ fn recovery_truncated_tail_recovers_earlier_entries() {
     );
 }
 
-
 // ── Corruption detection ──────────────────────────────────────────────────────
 // DESIGN.md "Error Recovery": "Will detect corruption via CRC check, but will not
 // fix data." Detection is surfaced through validate(); we do not assert that open()
@@ -87,7 +93,11 @@ fn recovery_crc_corruption_detected_by_validate() {
     let (dir, engine) = new_engine_with_bag(BAG);
     for i in 0..5 {
         engine
-            .set(&BAG.to_string(), &format!("k{i}"), format!("v{i}").as_bytes())
+            .set(
+                &BAG.to_string(),
+                &format!("k{i}"),
+                format!("v{i}").as_bytes(),
+            )
             .unwrap();
     }
 
@@ -130,10 +140,14 @@ fn boundary_after(n: usize, value: &[u8]) -> u64 {
     let engine = BarKV::create(dir.path().to_str().unwrap()).unwrap();
     engine.create_bag(&BAG.to_string()).unwrap();
     for i in 0..n {
-        engine.set(&BAG.to_string(), &format!("k{i}"), value).unwrap();
+        engine
+            .set(&BAG.to_string(), &format!("k{i}"), value)
+            .unwrap();
     }
     drop(engine);
-    fs::metadata(dir.path().join(format!("{BAG}-0.bkv"))).unwrap().len()
+    fs::metadata(dir.path().join(format!("{BAG}-0.bkv")))
+        .unwrap()
+        .len()
 }
 
 #[test]
@@ -141,7 +155,9 @@ fn recovery_truncated_value_region_truncates_file_to_boundary() {
     let value = vec![b'x'; 100];
     let (dir, engine) = new_engine_with_bag(BAG);
     for i in 0..5 {
-        engine.set(&BAG.to_string(), &format!("k{i}"), &value).unwrap();
+        engine
+            .set(&BAG.to_string(), &format!("k{i}"), &value)
+            .unwrap();
     }
     drop(engine);
 
@@ -172,7 +188,9 @@ fn recovery_truncated_header_region_truncates_file_to_boundary() {
     let value = b"v".to_vec();
     let (dir, engine) = new_engine_with_bag(BAG);
     for i in 0..5 {
-        engine.set(&BAG.to_string(), &format!("k{i}"), &value).unwrap();
+        engine
+            .set(&BAG.to_string(), &format!("k{i}"), &value)
+            .unwrap();
     }
     drop(engine);
 
@@ -197,7 +215,9 @@ fn recovery_write_after_recovery_persists() {
     let value = vec![b'x'; 100];
     let (dir, engine) = new_engine_with_bag(BAG);
     for i in 0..5 {
-        engine.set(&BAG.to_string(), &format!("k{i}"), &value).unwrap();
+        engine
+            .set(&BAG.to_string(), &format!("k{i}"), &value)
+            .unwrap();
     }
     drop(engine);
 
@@ -207,7 +227,9 @@ fn recovery_write_after_recovery_persists() {
 
     // Recover, then write a brand-new entry.
     let engine = reopen(&dir);
-    engine.set(&BAG.to_string(), &"fresh".to_string(), b"hello").unwrap();
+    engine
+        .set(&BAG.to_string(), &"fresh".to_string(), b"hello")
+        .unwrap();
     drop(engine);
 
     // Everything committed before the crash, plus the post-recovery write, survives.
@@ -230,7 +252,9 @@ fn recovery_store_is_clean_after_reopen() {
     let value = vec![b'x'; 100];
     let (dir, engine) = new_engine_with_bag(BAG);
     for i in 0..5 {
-        engine.set(&BAG.to_string(), &format!("k{i}"), &value).unwrap();
+        engine
+            .set(&BAG.to_string(), &format!("k{i}"), &value)
+            .unwrap();
     }
     drop(engine);
 
@@ -251,7 +275,9 @@ fn recovery_cut_at_entry_boundary_keeps_all_entries() {
     let value = vec![b'x'; 100];
     let (dir, engine) = new_engine_with_bag(BAG);
     for i in 0..5 {
-        engine.set(&BAG.to_string(), &format!("k{i}"), &value).unwrap();
+        engine
+            .set(&BAG.to_string(), &format!("k{i}"), &value)
+            .unwrap();
     }
     drop(engine);
 
@@ -273,7 +299,10 @@ fn recovery_cut_at_entry_boundary_keeps_all_entries() {
         "k4 was cut off at the boundary and must not come back"
     );
     let failures = engine.validate();
-    assert!(failures.is_empty(), "clean boundary cut must validate clean, got: {failures:?}");
+    assert!(
+        failures.is_empty(),
+        "clean boundary cut must validate clean, got: {failures:?}"
+    );
 }
 
 #[test]
@@ -290,7 +319,10 @@ fn recovery_truncated_active_keeps_sealed_files_intact() {
         .collect();
     bkv.sort();
     let active = bkv.last().unwrap().clone();
-    assert!(bkv.len() >= 2, "fill_to_rotations should have produced a sealed file");
+    assert!(
+        bkv.len() >= 2,
+        "fill_to_rotations should have produced a sealed file"
+    );
 
     let untouched: Vec<(PathBuf, Vec<u8>)> = fs::read_dir(dir.path())
         .unwrap()
@@ -309,7 +341,9 @@ fn recovery_truncated_active_keeps_sealed_files_intact() {
     let engine = reopen(&dir);
     // An early key, which lives in a sealed file, is still readable.
     assert_eq!(
-        engine.get(&BAG.to_string(), &"key-00000".to_string()).unwrap(),
+        engine
+            .get(&BAG.to_string(), &"key-00000".to_string())
+            .unwrap(),
         vec![0xABu8; 100]
     );
     drop(engine);
@@ -328,7 +362,9 @@ fn recovery_midfile_corruption_detected_by_validate() {
     let value = vec![b'x'; 100];
     let (dir, engine) = new_engine_with_bag(BAG);
     for i in 0..5 {
-        engine.set(&BAG.to_string(), &format!("k{i}"), &value).unwrap();
+        engine
+            .set(&BAG.to_string(), &format!("k{i}"), &value)
+            .unwrap();
     }
 
     // Flip a byte well inside the file (in entry k1's region), not at the tail.
@@ -353,7 +389,9 @@ fn recovery_midfile_corruption_skips_entry_and_keeps_rest() {
     let values: Vec<Vec<u8>> = (0..5).map(|i| vec![b'x'; 50 + i * 20]).collect();
     let (dir, engine) = new_engine_with_bag(BAG);
     for (i, value) in values.iter().enumerate() {
-        engine.set(&BAG.to_string(), &format!("k{i}"), value).unwrap();
+        engine
+            .set(&BAG.to_string(), &format!("k{i}"), value)
+            .unwrap();
     }
     drop(engine);
 

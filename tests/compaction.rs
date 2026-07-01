@@ -1,7 +1,6 @@
 mod common;
 use common::*;
 
-
 // ── Partial compaction ────────────────────────────────────────────────────────
 
 #[test]
@@ -24,13 +23,20 @@ fn compact_active_preserves_all_live_keys() {
 fn compact_active_deduplicates_overwritten_keys() {
     let (_dir, engine) = new_engine_with_bag(BAG);
     for _ in 0..5 {
-        engine.set(&BAG.to_string(), &"k".to_string(), b"noise").unwrap();
+        engine
+            .set(&BAG.to_string(), &"k".to_string(), b"noise")
+            .unwrap();
     }
-    engine.set(&BAG.to_string(), &"k".to_string(), b"final").unwrap();
+    engine
+        .set(&BAG.to_string(), &"k".to_string(), b"final")
+        .unwrap();
     for (_, res) in engine.compact_active() {
         res.unwrap();
     }
-    assert_eq!(engine.get(&BAG.to_string(), &"k".to_string()).unwrap(), b"final");
+    assert_eq!(
+        engine.get(&BAG.to_string(), &"k".to_string()).unwrap(),
+        b"final"
+    );
     assert_eq!(engine.len_bag(&BAG.to_string()).unwrap(), 1);
 }
 
@@ -38,7 +44,9 @@ fn compact_active_deduplicates_overwritten_keys() {
 fn compact_active_keeps_deleted_key_gone() {
     // Partial compaction keeps tombstones as safeguards; the key must remain absent.
     let (_dir, engine) = new_engine_with_bag(BAG);
-    engine.set(&BAG.to_string(), &"k".to_string(), b"v").unwrap();
+    engine
+        .set(&BAG.to_string(), &"k".to_string(), b"v")
+        .unwrap();
     engine.delete(&BAG.to_string(), &"k".to_string()).unwrap();
     for (_, res) in engine.compact_active() {
         res.unwrap();
@@ -50,7 +58,9 @@ fn compact_active_keeps_deleted_key_gone() {
 fn compact_active_result_survives_reopen() {
     let (dir, engine) = new_engine_with_bag(BAG);
     for i in 0..10u8 {
-        engine.set(&BAG.to_string(), &format!("k{i}"), &[i]).unwrap();
+        engine
+            .set(&BAG.to_string(), &format!("k{i}"), &[i])
+            .unwrap();
     }
     // Overwrite first half
     for i in 0..5u8 {
@@ -71,10 +81,7 @@ fn compact_active_result_survives_reopen() {
         );
     }
     for i in 5..10u8 {
-        assert_eq!(
-            engine.get(&BAG.to_string(), &format!("k{i}")).unwrap(),
-            [i]
-        );
+        assert_eq!(engine.get(&BAG.to_string(), &format!("k{i}")).unwrap(), [i]);
     }
 }
 
@@ -86,14 +93,15 @@ fn compact_active_empty_bag_is_ok() {
     }
 }
 
-
 // ── Full compaction ───────────────────────────────────────────────────────────
 
 #[test]
 fn full_compaction_preserves_all_live_keys() {
     let (_dir, engine) = new_engine_with_bag(BAG);
     for i in 0..20u8 {
-        engine.set(&BAG.to_string(), &format!("k{i}"), &[i]).unwrap();
+        engine
+            .set(&BAG.to_string(), &format!("k{i}"), &[i])
+            .unwrap();
     }
     for (_, res) in engine.full_compaction() {
         res.unwrap();
@@ -107,7 +115,9 @@ fn full_compaction_preserves_all_live_keys() {
 fn full_compaction_removes_deleted_entries() {
     let (_dir, engine) = new_engine_with_bag(BAG);
     for i in 0..10u8 {
-        engine.set(&BAG.to_string(), &format!("k{i}"), &[i]).unwrap();
+        engine
+            .set(&BAG.to_string(), &format!("k{i}"), &[i])
+            .unwrap();
     }
     for i in 0..5u8 {
         engine.delete(&BAG.to_string(), &format!("k{i}")).unwrap();
@@ -119,10 +129,7 @@ fn full_compaction_removes_deleted_entries() {
         assert!(!engine.exists(&BAG.to_string(), &format!("k{i}")).unwrap());
     }
     for i in 5..10u8 {
-        assert_eq!(
-            engine.get(&BAG.to_string(), &format!("k{i}")).unwrap(),
-            [i]
-        );
+        assert_eq!(engine.get(&BAG.to_string(), &format!("k{i}")).unwrap(), [i]);
     }
 }
 
@@ -130,7 +137,9 @@ fn full_compaction_removes_deleted_entries() {
 fn full_compaction_result_survives_reopen() {
     let (dir, engine) = new_engine_with_bag(BAG);
     for i in 0..20u8 {
-        engine.set(&BAG.to_string(), &format!("k{i}"), &[i]).unwrap();
+        engine
+            .set(&BAG.to_string(), &format!("k{i}"), &[i])
+            .unwrap();
     }
     for i in 0..10u8 {
         engine.delete(&BAG.to_string(), &format!("k{i}")).unwrap();
@@ -145,13 +154,9 @@ fn full_compaction_result_survives_reopen() {
         assert!(!engine.exists(&BAG.to_string(), &format!("k{i}")).unwrap());
     }
     for i in 10..20u8 {
-        assert_eq!(
-            engine.get(&BAG.to_string(), &format!("k{i}")).unwrap(),
-            [i]
-        );
+        assert_eq!(engine.get(&BAG.to_string(), &format!("k{i}")).unwrap(), [i]);
     }
 }
-
 
 // ── File rotation (triggers when active file exceeds MIN_LOCK_SIZE = 10 000 B) ─
 
@@ -161,7 +166,9 @@ fn rotation_all_keys_readable_after_one_rotation() {
     fill_to_rotations(&engine, BAG, 1);
     for i in 0..80 {
         assert!(
-            engine.exists(&BAG.to_string(), &format!("key-{i:05}")).unwrap(),
+            engine
+                .exists(&BAG.to_string(), &format!("key-{i:05}"))
+                .unwrap(),
             "key-{i:05} missing after rotation"
         );
     }
@@ -175,7 +182,9 @@ fn rotation_data_survives_reopen_after_one_rotation() {
 
     let engine = reopen(&dir);
     for i in 0..80 {
-        let val = engine.get(&BAG.to_string(), &format!("key-{i:05}")).unwrap();
+        let val = engine
+            .get(&BAG.to_string(), &format!("key-{i:05}"))
+            .unwrap();
         assert_eq!(val, vec![0xABu8; 100]);
     }
 }
@@ -188,7 +197,9 @@ fn rotation_data_survives_reopen_after_two_rotations() {
 
     let engine = reopen(&dir);
     for i in 0..160 {
-        let val = engine.get(&BAG.to_string(), &format!("key-{i:05}")).unwrap();
+        let val = engine
+            .get(&BAG.to_string(), &format!("key-{i:05}"))
+            .unwrap();
         assert_eq!(val, vec![0xABu8; 100]);
     }
 }
@@ -218,12 +229,16 @@ fn rotation_full_compaction_then_reopen() {
     let engine = reopen(&dir);
     for i in 0..80 {
         assert!(
-            !engine.exists(&BAG.to_string(), &format!("key-{i:05}")).unwrap(),
+            !engine
+                .exists(&BAG.to_string(), &format!("key-{i:05}"))
+                .unwrap(),
             "Deleted key-{i:05} still present after compaction+reopen"
         );
     }
     for i in 80..160 {
-        let val = engine.get(&BAG.to_string(), &format!("key-{i:05}")).unwrap();
+        let val = engine
+            .get(&BAG.to_string(), &format!("key-{i:05}"))
+            .unwrap();
         assert_eq!(val, value);
     }
 }
@@ -237,15 +252,13 @@ fn rotation_overwrite_across_files_returns_latest() {
     // Overwrite all keys with a different value
     for i in 0..80 {
         engine
-            .set(
-                &BAG.to_string(),
-                &format!("key-{i:05}"),
-                &[i as u8],
-            )
+            .set(&BAG.to_string(), &format!("key-{i:05}"), &[i as u8])
             .unwrap();
     }
     for i in 0..80 {
-        let val = engine.get(&BAG.to_string(), &format!("key-{i:05}")).unwrap();
+        let val = engine
+            .get(&BAG.to_string(), &format!("key-{i:05}"))
+            .unwrap();
         assert_eq!(val, [i as u8]);
     }
 }

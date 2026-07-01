@@ -1,7 +1,6 @@
 mod common;
 use common::*;
 
-
 #[test]
 fn validate_fresh_store_is_clean() {
     let (_dir, engine) = new_engine();
@@ -12,7 +11,9 @@ fn validate_fresh_store_is_clean() {
 fn validate_after_crud_operations_is_clean() {
     let (_dir, engine) = new_engine_with_bag(BAG);
     for i in 0..20u8 {
-        engine.set(&BAG.to_string(), &format!("k{i}"), &[i]).unwrap();
+        engine
+            .set(&BAG.to_string(), &format!("k{i}"), &[i])
+            .unwrap();
     }
     for i in 0..10u8 {
         engine.delete(&BAG.to_string(), &format!("k{i}")).unwrap();
@@ -25,7 +26,9 @@ fn validate_after_crud_operations_is_clean() {
 fn validate_after_reopen_is_clean() {
     let (dir, engine) = new_engine_with_bag(BAG);
     for i in 0..10u8 {
-        engine.set(&BAG.to_string(), &format!("k{i}"), &[i]).unwrap();
+        engine
+            .set(&BAG.to_string(), &format!("k{i}"), &[i])
+            .unwrap();
     }
     drop(engine);
     let engine = reopen(&dir);

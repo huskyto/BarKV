@@ -3,7 +3,6 @@ use common::*;
 
 use barkv::EngineError;
 
-
 #[test]
 fn bag_create_and_list() {
     let (_dir, engine) = new_engine();
@@ -39,10 +38,16 @@ fn bag_drop_nonexistent_fails() {
 #[test]
 fn bag_dropped_bag_rejects_further_ops() {
     let (_dir, engine) = new_engine_with_bag(BAG);
-    engine.set(&BAG.to_string(), &"k".to_string(), b"v").unwrap();
+    engine
+        .set(&BAG.to_string(), &"k".to_string(), b"v")
+        .unwrap();
     engine.drop_bag(&BAG.to_string()).unwrap();
     assert!(engine.get(&BAG.to_string(), &"k".to_string()).is_err());
-    assert!(engine.set(&BAG.to_string(), &"k".to_string(), b"v").is_err());
+    assert!(
+        engine
+            .set(&BAG.to_string(), &"k".to_string(), b"v")
+            .is_err()
+    );
     assert!(engine.list_keys(&BAG.to_string()).is_err());
 }
 
@@ -55,8 +60,12 @@ fn bag_len_empty() {
 #[test]
 fn bag_len_after_set_and_delete() {
     let (_dir, engine) = new_engine_with_bag(BAG);
-    engine.set(&BAG.to_string(), &"k1".to_string(), b"v1").unwrap();
-    engine.set(&BAG.to_string(), &"k2".to_string(), b"v2").unwrap();
+    engine
+        .set(&BAG.to_string(), &"k1".to_string(), b"v1")
+        .unwrap();
+    engine
+        .set(&BAG.to_string(), &"k2".to_string(), b"v2")
+        .unwrap();
     assert_eq!(engine.len_bag(&BAG.to_string()).unwrap(), 2);
     engine.delete(&BAG.to_string(), &"k1".to_string()).unwrap();
     assert_eq!(engine.len_bag(&BAG.to_string()).unwrap(), 1);
@@ -65,9 +74,15 @@ fn bag_len_after_set_and_delete() {
 #[test]
 fn bag_overwrite_does_not_inflate_len() {
     let (_dir, engine) = new_engine_with_bag(BAG);
-    engine.set(&BAG.to_string(), &"k".to_string(), b"v1").unwrap();
-    engine.set(&BAG.to_string(), &"k".to_string(), b"v2").unwrap();
-    engine.set(&BAG.to_string(), &"k".to_string(), b"v3").unwrap();
+    engine
+        .set(&BAG.to_string(), &"k".to_string(), b"v1")
+        .unwrap();
+    engine
+        .set(&BAG.to_string(), &"k".to_string(), b"v2")
+        .unwrap();
+    engine
+        .set(&BAG.to_string(), &"k".to_string(), b"v3")
+        .unwrap();
     assert_eq!(engine.len_bag(&BAG.to_string()).unwrap(), 1);
 }
 
